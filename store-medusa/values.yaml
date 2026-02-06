@@ -1,0 +1,27 @@
+# Default values for store-medusa.
+replicaCount: 1
+
+image:
+  repository: node
+  pullPolicy: IfNotPresent
+  tag: "20-alpine"
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  limits:
+    cpu: "1"
+    memory: 2Gi
+  requests:
+    cpu: "500m"
+    memory: 1Gi
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  hosts:
+    - host: medusa.127.0.0.1.nip.io

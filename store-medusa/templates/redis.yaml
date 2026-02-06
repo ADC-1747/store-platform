@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store-medusa.fullname" . }}-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "store-medusa.fullname" . }}-redis
+  template:
+    metadata:
+      labels:
+        app: {{ include "store-medusa.fullname" . }}-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store-medusa.fullname" . }}-redis
+spec:
+  ports:
+    - port: 6379
+  selector:
+    app: {{ include "store-medusa.fullname" . }}-redis
