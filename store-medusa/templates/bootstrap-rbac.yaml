@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: medusa-bootstrap-sa
+  namespace: store-medusa-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: medusa-bootstrap-role
+  namespace: store-medusa-test
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: medusa-bootstrap-binding
+  namespace: store-medusa-test
+subjects:
+  - kind: ServiceAccount
+    name: medusa-bootstrap-sa
+roleRef:
+  kind: Role
+  name: medusa-bootstrap-role
+  apiGroup: rbac.authorization.k8s.io

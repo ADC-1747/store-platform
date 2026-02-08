@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medusa-storefront
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: medusa-storefront
+  template:
+    metadata:
+      labels:
+        app: medusa-storefront
+    spec:
+      containers:
+        - name: storefront
+          image: {{ .Values.storefront.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "run", "dev", "--", "-p", "8000"]
+
+          env:
+            - name: NODE_ENV
+              value: production
+
+            - name: MEDUSA_BACKEND_URL
+              value: http://medusa-backend:{{ .Values.backend.port }}
+
+            - name: NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: medusa-storefront-config
+                  key: NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
+
+            - name: NEXT_PUBLIC_DISABLE_STRIPE
+              value: "true"
+
+            - name: NEXT_PUBLIC_MEDUSA_DISABLE_SSG
+              value: "true"
+
+            - name: NEXT_BUILD_IGNORE_API_ERRORS
+              value: "true"
+
+          ports:
+            - containerPort: {{ .Values.storefront.port }}

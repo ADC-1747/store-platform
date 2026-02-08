@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: medusa-bootstrap
+  namespace: store-medusa-test
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: curlimages/curl:8.5.0
+          command: ["/bin/sh", "-c"]
+          env:
+            - name: BACKEND_URL
+              value: http://medusa-backend:9000
+
+            - name: ADMIN_EMAIL
+              value: {{ .Values.admin.email | quote }}
+            - name: ADMIN_PASSWORD
+              value: {{ .Values.admin.password | quote }}
+
+            - name: REGION_NAME
+              value: {{ .Values.bootstrap.region.name | quote }}
+            - name: REGION_CURRENCY
+              value: {{ .Values.bootstrap.region.currency | quote }}
+            - name: REGION_COUNTRY
+              value: {{ .Values.bootstrap.region.country | quote }}
+
+          args:
+            - |
+              set -e
+
+              echo "⏳ Waiting for backend..."
+              until curl -sf $BACKEND_URL/health; do sleep 5; done
+
+              echo "🔐 Login with admin"
+              TOKEN=$(curl -sf -X POST $BACKEND_URL/auth/user/emailpass \
+                -H "Content-Type: application/json" \
+                --data-raw "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
+                | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+              if [ -z "$TOKEN" ]; then
+                echo "❌ Failed to obtain admin token"
+                exit 1
+              fi
+              echo "✅ Admin token obtained"
+
+              echo "🌍 Checking region"
+              REGION_ID=$(curl -sf $BACKEND_URL/admin/regions \
+                -H "Authorization: Bearer $TOKEN" \
+                | sed -n "s/.*\"name\":\"$REGION_NAME\".*\"id\":\"\([^\"]*\)\".*/\1/p")
+
+              if [ -z "$REGION_ID" ]; then
+                echo "➕ Creating region"
+                REGION_ID=$(curl -sf -X POST $BACKEND_URL/admin/regions \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Content-Type: application/json" \
+                  --data-raw "{\"name\":\"$REGION_NAME\",\"currency_code\":\"$REGION_CURRENCY\"}" \
+                  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              else
+                echo "✔ Region already exists: $REGION_ID"
+              fi
+
+              echo "🌎 Attaching country"
+              curl -sf -X POST $BACKEND_URL/admin/regions/$REGION_ID \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-raw "{\"countries\":[\"$REGION_COUNTRY\"]}" || true
+
+              echo "✅ Bootstrap finished"

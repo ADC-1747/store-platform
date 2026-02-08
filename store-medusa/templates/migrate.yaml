@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: medusa-migrate
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ .Values.backend.image }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "🗄️ Running DB migrations"
+              npx medusa db:migrate
+
+              echo "👤 Creating admin user (idempotent)"
+              npx medusa user \
+                --email {{ .Values.admin.email }} \
+                --password {{ .Values.admin.password }} \
+              || echo "Admin already exists, continuing"
+
+              echo "✅ Migration + admin bootstrap complete"
+          env:
+            - name: DATABASE_URL
+              value: postgres://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.database }}?sslmode=disable
+            - name: NODE_ENV
+              value: production

@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: medusa-publishable-key
+  namespace: store-medusa-test
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    spec:
+      serviceAccountName: medusa-bootstrap-sa
+      restartPolicy: Never
+      containers:
+        - name: extract-key
+          image: ubuntu:22.04
+          env:
+            - name: PGPASSWORD
+              value: {{ .Values.postgres.password }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              echo "🔑 Installing required packages"
+              apt-get update
+              apt-get install -y postgresql-client curl ca-certificates
+
+              echo "🔑 Installing kubectl"
+              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+              chmod +x kubectl
+              mv kubectl /usr/local/bin/
+
+              echo "🔑 Extracting publishable key from Postgres"
+              PKEY=$(psql \
+                -h postgres \
+                -U {{ .Values.postgres.user }} \
+                -d {{ .Values.postgres.database }} \
+                -t -A \
+                -c "SELECT token FROM api_key WHERE type='publishable' LIMIT 1;")
+
+              echo "Publishable key: $PKEY"
+
+              echo "🔑 Creating ConfigMap medusa-storefront-config"
+              kubectl create configmap medusa-storefront-config \
+                --namespace store-medusa-test \
+                --from-literal=NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY="$PKEY" \
+                --dry-run=client -o yaml | kubectl apply -f -
+
+              echo "✅ Publishable key stored"

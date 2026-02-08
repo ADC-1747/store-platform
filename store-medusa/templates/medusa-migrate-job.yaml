@@ -1,0 +1,20 @@
+# apiVersion: batch/v1
+# kind: Job
+# metadata:
+#   name: medusa-migrate
+#   namespace: store-medusa-test
+# spec:
+#   backoffLimit: 3
+#   template:
+#     spec:
+#       restartPolicy: Never
+#       containers:
+#         - name: migrate
+#           image: {{ .Values.backend.image }}
+#           imagePullPolicy: IfNotPresent
+#           command: ["npx", "medusa", "db:migrate"]
+#           env:
+#             - name: DATABASE_URL
+#               value: postgres://medusa:medusa123@postgres:5432/medusa?sslmode=disable
+#             - name: NODE_ENV
+#               value: production

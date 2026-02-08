@@ -1,23 +1,31 @@
-{{- if .Values.ingress.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "store-medusa.fullname" . }}
+  name: medusa-ingress
+  namespace: store-medusa-test
   annotations:
-    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    kubernetes.io/ingress.class: nginx
 spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
-  {{- end }}
   rules:
-    - host: {{ index .Values.ingress.hosts 0 "host" | quote }}
+    # Storefront
+    - host: medusa-test.127.0.0.1.nip.io
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "store-medusa.fullname" . }}
+                name: medusa-storefront
                 port:
-                  number: {{ .Values.service.port }}
-{{- end }}
+                  number: 8000
+    # Backend / Admin
+    - host: medusa-test-api.127.0.0.1.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: medusa-backend
+                port:
+                  number: 9000
