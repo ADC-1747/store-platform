@@ -23,7 +23,8 @@ spec:
 
               echo "🗄️ Running DB migrations"
               npx medusa db:migrate
-
+              echo "🌱 Seeding test data"
+              npm run seed || echo "Seeding failed or already done, continuing"
               echo "👤 Creating admin user (idempotent)"
               npx medusa user \
                 --email {{ .Values.admin.email }} \

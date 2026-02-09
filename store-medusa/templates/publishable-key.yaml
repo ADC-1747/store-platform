@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: medusa-publishable-key
-  namespace: store-medusa-test
+  namespace: {{ .Release.Namespace }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "1"
@@ -45,7 +45,7 @@ spec:
 
               echo "🔑 Creating ConfigMap medusa-storefront-config"
               kubectl create configmap medusa-storefront-config \
-                --namespace store-medusa-test \
+                --namespace {{ .Release.Namespace }} \
                 --from-literal=NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY="$PKEY" \
                 --dry-run=client -o yaml | kubectl apply -f -
 

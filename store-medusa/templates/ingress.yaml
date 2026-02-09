@@ -2,13 +2,13 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: medusa-ingress
-  namespace: store-medusa-test
+  namespace: {{ .Release.Namespace }}
   annotations:
     kubernetes.io/ingress.class: nginx
 spec:
   rules:
     # Storefront
-    - host: medusa-test.127.0.0.1.nip.io
+    - host: {{ .Release.Name }}.127.0.0.1.nip.io
       http:
         paths:
           - path: /
@@ -19,7 +19,7 @@ spec:
                 port:
                   number: 8000
     # Backend / Admin
-    - host: medusa-test-api.127.0.0.1.nip.io
+    - host: {{ .Release.Name }}-api.127.0.0.1.nip.io
       http:
         paths:
           - path: /

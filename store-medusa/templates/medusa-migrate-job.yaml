@@ -2,7 +2,7 @@
 # kind: Job
 # metadata:
 #   name: medusa-migrate
-#   namespace: store-medusa-test
+#   namespace: {{ .Release.Namespace }}
 # spec:
 #   backoffLimit: 3
 #   template:
