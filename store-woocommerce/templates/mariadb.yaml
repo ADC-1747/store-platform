@@ -16,6 +16,8 @@ spec:
       containers:
         - name: mariadb
           image: mariadb:10.6
+          args:
+            - "--skip-ssl"
           env:
             - name: MYSQL_DATABASE
               value: wordpress

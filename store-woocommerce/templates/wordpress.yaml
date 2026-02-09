@@ -50,6 +50,10 @@ spec:
                   key: password
             - name: WORDPRESS_DB_NAME
               value: wordpress
+            - name: PHP_MEMORY_LIMIT
+              value: 256M
+            - name: PHP_MAX_EXECUTION_TIME
+              value: "300"
           ports:
             - containerPort: 80
           volumeMounts:

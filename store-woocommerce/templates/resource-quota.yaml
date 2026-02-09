@@ -4,11 +4,11 @@ metadata:
   name: store-quota
 spec:
   hard:
-    requests.cpu: "500m"
-    requests.memory: "1Gi"
-    limits.cpu: "1"
-    limits.memory: "2Gi"
-    pods: "5"
-    services: "5"
+    requests.cpu: "700m"
+    requests.memory: "1.5Gi"
+    limits.cpu: "1500m"
+    limits.memory: "3Gi"
+    pods: "6"
+    services: "6"
     persistentvolumeclaims: "5"
     requests.storage: "5Gi"
