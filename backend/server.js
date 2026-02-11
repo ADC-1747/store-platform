@@ -113,10 +113,32 @@ const atomicUpdateStores = async (updateFn) => {
     }
 };
 
+// Helper function to add an event to a store
+const addStoreEvent = async (storeId, message, eventType = 'info') => {
+    await atomicUpdateStores((stores) => {
+        const storeIndex = stores.findIndex(s => s.id === storeId);
+        if (storeIndex !== -1) {
+            if (!stores[storeIndex].events) {
+                stores[storeIndex].events = [];
+            }
+            stores[storeIndex].events.push({
+                timestamp: new Date().toISOString(),
+                message,
+                type: eventType // 'info', 'success', 'error', 'warning'
+            });
+            // Keep only last 50 events to prevent unbounded growth
+            if (stores[storeIndex].events.length > 50) {
+                stores[storeIndex].events = stores[storeIndex].events.slice(-50);
+            }
+        }
+        return stores;
+    });
+};
+
 // Refresh store status based on actual Kubernetes state
 async function refreshStoreStatus(store) {
-    // Don't refresh deleted or failed stores - they're in final states
-    if (store.status === 'Deleting' || store.status === 'Failed') {
+    // Don't refresh deleted stores - they're in final state
+    if (store.status === 'Deleting') {
         return store;
     }
 
@@ -125,27 +147,87 @@ async function refreshStoreStatus(store) {
     try {
         // Check if namespace exists
         const nsCheck = await execPromise(`kubectl get namespace ${namespace} 2>/dev/null || echo "notfound"`);
-        if (nsCheck.trim().includes('notfound')) {
+        const namespaceExists = !nsCheck.trim().includes('notfound');
+        
+        if (!namespaceExists) {
+            // Namespace doesn't exist - check if we should mark as failed
             if (store.status === 'Provisioning') {
-                // Namespace doesn't exist but store is provisioning - might have failed
-                return { ...store, status: 'Failed', error: 'Namespace not found' };
+                // Only mark as Failed if store has been provisioning for more than 30 seconds
+                // This prevents false failures during the initial provisioning window
+                const createdAt = new Date(store.createdAt || store.provisioningStartedAt);
+                const secondsSinceCreation = (Date.now() - createdAt.getTime()) / 1000;
+                
+                if (secondsSinceCreation > 30) {
+                    // Store has been provisioning for >30s but namespace doesn't exist - likely failed
+                    console.log(`Store ${store.name} has been provisioning for ${secondsSinceCreation.toFixed(1)}s but namespace doesn't exist - marking as Failed`);
+                    const failedStore = { ...store, status: 'Failed', error: 'Namespace not found after 30 seconds' };
+                    addStoreEvent(store.id, `Provisioning failed: Namespace not found after ${Math.round(secondsSinceCreation)}s`, 'error').catch(err => 
+                        console.error(`Error adding event:`, err)
+                    );
+                    return failedStore;
+                } else {
+                    // Still within grace period - namespace might be created soon
+                    console.log(`Store ${store.name} namespace not found yet (${secondsSinceCreation.toFixed(1)}s since creation) - still provisioning`);
+                    return store;
+                }
+            } else if (store.status === 'Failed') {
+                // Store is marked as Failed but namespace doesn't exist - keep Failed status
+                return store;
             }
+            // For other statuses, return as-is
             return store;
         }
 
-        // Check if store is actually ready
+        // Namespace exists - check if store is actually ready
         const isReady = await checkStoreReady(store.name, namespace, store.type);
         
-        if (isReady && store.status !== 'Ready') {
-            // Store is ready but status wasn't Ready - update it
-            console.log(`Refreshing store ${store.name}: Setting status to Ready`);
-            return { ...store, status: 'Ready', error: null };
-        } else if (!isReady && store.status === 'Ready') {
-            // Store was marked Ready but is not actually ready - revert to Provisioning
-            console.log(`Refreshing store ${store.name}: Reverting status from Ready to Provisioning (not actually ready)`);
-            return { ...store, status: 'Provisioning', error: null };
-        } else if (!isReady && store.status === 'Provisioning') {
-            // Store is still provisioning - keep status as is
+        if (isReady) {
+            // Store is ready
+            if (store.status !== 'Ready') {
+                // Store became ready - update status
+                console.log(`Refreshing store ${store.name}: Setting status to Ready`);
+                const updatedStore = { ...store, status: 'Ready', error: null };
+                
+                // Add event if status changed from Provisioning or Failed
+                if (store.status === 'Provisioning' || store.status === 'Failed') {
+                    const provisioningDuration = store.provisioningStartedAt 
+                        ? Math.round((Date.now() - new Date(store.provisioningStartedAt).getTime()) / 1000)
+                        : null;
+                    updatedStore.provisioningCompletedAt = new Date().toISOString();
+                    if (provisioningDuration !== null) {
+                        updatedStore.provisioningDuration = provisioningDuration;
+                    }
+                    
+                    const eventMessage = store.status === 'Failed' 
+                        ? `Store recovered and became ready (was previously marked as Failed)`
+                        : `Store became ready (detected via status refresh)`;
+                    
+                    // Fire and forget - don't await to avoid blocking refresh
+                    addStoreEvent(store.id, eventMessage, 'success').catch(err => 
+                        console.error(`Error adding event for store ${store.name}:`, err)
+                    );
+                }
+                return updatedStore;
+            }
+            // Already Ready - return as-is
+            return store;
+        } else {
+            // Store is not ready
+            if (store.status === 'Ready') {
+                // Store was marked Ready but is not actually ready - revert to Provisioning
+                console.log(`Refreshing store ${store.name}: Reverting status from Ready to Provisioning (not actually ready)`);
+                // Fire and forget - don't await to avoid blocking refresh
+                addStoreEvent(store.id, `Store readiness check failed - reverting to Provisioning`, 'warning').catch(err => 
+                    console.error(`Error adding event for store ${store.name}:`, err)
+                );
+                return { ...store, status: 'Provisioning', error: null };
+            } else if (store.status === 'Failed') {
+                // Store is Failed but namespace exists and pods are not ready
+                // This could be a recovery attempt - check if it's been a while since failure
+                // For now, keep Failed status if namespace exists but pods aren't ready
+                return store;
+            }
+            // Still provisioning - keep status as is
             return store;
         }
     } catch (error) {
@@ -243,7 +325,13 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                 environment: effectiveEnvironment, // Store the effective environment
                 status: 'Provisioning',
                 url: storeUrl,
-                createdAt: new Date().toISOString()
+                createdAt: new Date().toISOString(),
+                provisioningStartedAt: new Date().toISOString(),
+                events: [{
+                    timestamp: new Date().toISOString(),
+                    message: `Store creation initiated`,
+                    type: 'info'
+                }]
             };
 
             return [...currentStores, newStore];
@@ -301,8 +389,14 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
         const valuesPath = path.join(ChartPath, valuesFile);
 
     try {
+        // Add event: Namespace creation started
+        await addStoreEvent(newStore.id, `Creating namespace: ${namespace}`, 'info');
+        
         // 1. Create namespace
         await execPromise(`kubectl create namespace ${namespace} || true`);
+        
+        // Add event: Namespace created
+        await addStoreEvent(newStore.id, `Namespace created successfully`, 'success');
 
         // 2. Install Helm chart with environment-specific values
         // Assessment requirement: Differences handled via Helm values files
@@ -444,10 +538,21 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
 
         console.log(`Executing: ${helmCommand}`);
         console.log(`Using values file: ${valuesFile}`);
+        
+        // Add event: Helm installation started
+        await addStoreEvent(newStore.id, `Installing Helm chart (${type})`, 'info');
+        
         await execPromise(helmCommand);
+        
+        // Add event: Helm installation completed
+        await addStoreEvent(newStore.id, `Helm chart installed successfully`, 'success');
 
         // Wait for store to be truly ready (check every 10 seconds, max 10 minutes)
         console.log(`Waiting for store ${name} to be ready...`);
+        
+        // Add event: Waiting for readiness
+        await addStoreEvent(newStore.id, `Waiting for store to become ready...`, 'info');
+        
         // namespace is already declared above at line 266
         let isReady = false;
         const maxWaitTime = 10 * 60 * 1000; // 10 minutes
@@ -463,28 +568,52 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
         }
 
         if (isReady) {
+            const provisioningEndTime = new Date().toISOString();
+            const provisioningDuration = Math.round((Date.now() - new Date(newStore.provisioningStartedAt).getTime()) / 1000); // seconds
+            
             // Update status to Ready (atomic operation)
             await atomicUpdateStores((stores) => {
                 const storeIndex = stores.findIndex(s => s.id === newStore.id);
                 if (storeIndex !== -1) {
                     stores[storeIndex].status = 'Ready';
+                    stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
+                    stores[storeIndex].provisioningDuration = provisioningDuration;
                 }
                 return stores;
             });
-            console.log(`Store ${name} is now ready!`);
+            
+            // Add success event with duration
+            await addStoreEvent(newStore.id, `Store is ready! Provisioning completed in ${provisioningDuration}s`, 'success');
+            console.log(`Store ${name} is now ready! (took ${provisioningDuration}s)`);
         } else {
             console.warn(`Store ${name} did not become ready within ${maxWaitTime/1000/60} minutes, but Helm install completed`);
+            const provisioningEndTime = new Date().toISOString();
+            const provisioningDuration = Math.round((Date.now() - new Date(newStore.provisioningStartedAt).getTime()) / 1000);
+            
             // Still mark as Ready since Helm succeeded, but log warning
             await atomicUpdateStores((stores) => {
                 const storeIndex = stores.findIndex(s => s.id === newStore.id);
                 if (storeIndex !== -1) {
                     stores[storeIndex].status = 'Ready';
+                    stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
+                    stores[storeIndex].provisioningDuration = provisioningDuration;
                 }
                 return stores;
             });
+            
+            // Add warning event
+            await addStoreEvent(newStore.id, `Store marked as ready (readiness check timeout, but Helm succeeded)`, 'warning');
         }
     } catch (error) {
         console.error(`Error provisioning store ${name}:`, error);
+        const provisioningEndTime = new Date().toISOString();
+        const provisioningDuration = newStore.provisioningStartedAt 
+            ? Math.round((Date.now() - new Date(newStore.provisioningStartedAt).getTime()) / 1000)
+            : null;
+        
+        // Add error event
+        await addStoreEvent(newStore.id, `Provisioning failed: ${error.message}`, 'error');
+        
         // Update status to Failed (atomic operation)
         try {
             await atomicUpdateStores((stores) => {
@@ -492,6 +621,10 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                 if (storeIndex !== -1) {
                     stores[storeIndex].status = 'Failed';
                     stores[storeIndex].error = error.message;
+                    if (provisioningDuration !== null) {
+                        stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
+                        stores[storeIndex].provisioningDuration = provisioningDuration;
+                    }
                 }
                 return stores;
             });
@@ -561,6 +694,9 @@ app.delete('/api/stores/:id', async (req, res) => {
     const namespace = `store-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
     try {
+        // Add deletion event
+        await addStoreEvent(id, `Store deletion initiated`, 'info');
+        
         // Mark as deleting to prevent concurrent operations
         await atomicUpdateStores((stores) => {
             const storeIndex = stores.findIndex(s => s.id === id);
@@ -570,11 +706,20 @@ app.delete('/api/stores/:id', async (req, res) => {
             return stores;
         });
 
+        // Add event: Cleanup started
+        await addStoreEvent(id, `Uninstalling Helm release and deleting namespace`, 'info');
+        
         // 1. Uninstall Helm release (idempotent - || true ensures no error if already deleted)
         await execPromise(`helm uninstall ${name} -n ${namespace} || true`);
+        
+        // Add event: Helm uninstalled
+        await addStoreEvent(id, `Helm release uninstalled`, 'success');
 
         // 2. Delete namespace (idempotent - || true ensures no error if already deleted)
         await execPromise(`kubectl delete namespace ${namespace} || true`);
+        
+        // Add event: Namespace deleted
+        await addStoreEvent(id, `Namespace deleted - cleanup completed`, 'success');
 
         // Remove from list (atomic operation)
         await atomicUpdateStores((stores) => {
@@ -838,6 +983,52 @@ setInterval(async () => {
         console.error('Error in periodic status refresh:', error);
     }
 }, 5000); // Check every 5 seconds
+
+// Metrics endpoint for observability
+app.get('/api/metrics', async (req, res) => {
+    try {
+        const stores = await readStores();
+        
+        // Calculate metrics
+        const totalStores = stores.length;
+        const storesByStatus = {
+            Ready: stores.filter(s => s.status === 'Ready').length,
+            Provisioning: stores.filter(s => s.status === 'Provisioning').length,
+            Failed: stores.filter(s => s.status === 'Failed').length,
+            Deleting: stores.filter(s => s.status === 'Deleting').length
+        };
+        
+        const storesByType = {
+            woocommerce: stores.filter(s => s.type === 'woocommerce').length,
+            medusa: stores.filter(s => s.type === 'medusa').length
+        };
+        
+        // Provisioning duration statistics
+        const completedStores = stores.filter(s => s.provisioningDuration !== undefined && s.provisioningDuration !== null);
+        const provisioningDurations = completedStores.map(s => s.provisioningDuration);
+        
+        const metrics = {
+            totalStores,
+            storesByStatus,
+            storesByType,
+            provisioning: {
+                totalCompleted: completedStores.length,
+                totalFailed: stores.filter(s => s.status === 'Failed').length,
+                averageDurationSeconds: provisioningDurations.length > 0
+                    ? Math.round(provisioningDurations.reduce((a, b) => a + b, 0) / provisioningDurations.length)
+                    : null,
+                minDurationSeconds: provisioningDurations.length > 0 ? Math.min(...provisioningDurations) : null,
+                maxDurationSeconds: provisioningDurations.length > 0 ? Math.max(...provisioningDurations) : null
+            },
+            timestamp: new Date().toISOString()
+        };
+        
+        res.json(metrics);
+    } catch (error) {
+        console.error('Error calculating metrics:', error);
+        res.status(500).json({ error: 'Failed to calculate metrics' });
+    }
+});
 
 app.listen(port, () => {
     console.log(`Backend listening at http://localhost:${port}`);

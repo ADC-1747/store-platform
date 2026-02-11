@@ -14,12 +14,28 @@ function App() {
     showAdvanced: false 
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [expandedStore, setExpandedStore] = useState(null);
+  const [metrics, setMetrics] = useState(null);
 
   useEffect(() => {
     fetchStores();
-    const interval = setInterval(fetchStores, 5000); // Poll every 5s
+    fetchMetrics();
+    const interval = setInterval(() => {
+      fetchStores();
+      fetchMetrics();
+    }, 5000); // Poll every 5s
     return () => clearInterval(interval);
   }, []);
+
+  const fetchMetrics = async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/metrics`);
+      const data = await resp.json();
+      setMetrics(data);
+    } catch (err) {
+      console.error("Failed to fetch metrics", err);
+    }
+  };
 
   const fetchStores = async () => {
     try {
@@ -84,9 +100,30 @@ function App() {
           <h1>Urumi Store Platform</h1>
           <p style={{ color: '#94a3b8', margin: '4px 0 0' }}>Provisioning Nodes Locally</p>
         </div>
-        <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
-          Create New Store
-        </button>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          {metrics && (
+            <div style={{ 
+              display: 'flex', 
+              gap: '1.5rem', 
+              fontSize: '0.875rem', 
+              color: '#64748b',
+              background: '#f8fafc',
+              padding: '0.5rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid #e2e8f0'
+            }}>
+              <span><strong>{metrics.totalStores}</strong> stores</span>
+              <span><strong>{metrics.storesByStatus.Ready}</strong> ready</span>
+              <span><strong>{metrics.storesByStatus.Provisioning}</strong> provisioning</span>
+              {metrics.provisioning.averageDurationSeconds && (
+                <span>Avg: <strong>{metrics.provisioning.averageDurationSeconds}s</strong></span>
+              )}
+            </div>
+          )}
+          <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
+            Create New Store
+          </button>
+        </div>
       </header>
 
       <div className="store-grid">
@@ -96,7 +133,14 @@ function App() {
               {store.status}
             </span>
             <div className="store-name">{store.name}</div>
-            <div className="store-meta">{store.type} • {store.environment || 'local'} • {new Date(store.createdAt).toLocaleDateString()}</div>
+            <div className="store-meta">
+              {store.type} • {store.environment || 'local'} • {new Date(store.createdAt).toLocaleDateString()}
+              {store.provisioningDuration !== undefined && store.provisioningDuration !== null && (
+                <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
+                  • {store.provisioningDuration}s
+                </span>
+              )}
+            </div>
 
             <div className="store-actions">
               {store.status === 'Ready' && (
@@ -104,6 +148,13 @@ function App() {
                   Open Store
                 </a>
               )}
+              <button 
+                className="btn-secondary" 
+                onClick={() => setExpandedStore(expandedStore === store.id ? null : store.id)}
+                style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}
+              >
+                {expandedStore === store.id ? 'Hide' : 'View'} Events
+              </button>
               <button className="btn-danger" onClick={() => handleDelete(store.id)}>
                 Delete
               </button>
@@ -111,6 +162,44 @@ function App() {
             {store.error && (
               <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '10px' }}>
                 Error: {store.error}
+              </div>
+            )}
+            
+            {expandedStore === store.id && store.events && store.events.length > 0 && (
+              <div style={{ 
+                marginTop: '1rem', 
+                padding: '1rem', 
+                background: '#f8fafc', 
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
+                maxHeight: '300px',
+                overflowY: 'auto'
+              }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.75rem', color: '#334155' }}>
+                  Activity Log ({store.events.length} events)
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {[...store.events].reverse().map((event, idx) => (
+                    <div key={idx} style={{ 
+                      fontSize: '0.75rem', 
+                      padding: '0.5rem',
+                      background: 'white',
+                      borderRadius: '4px',
+                      borderLeft: `3px solid ${
+                        event.type === 'success' ? '#10b981' :
+                        event.type === 'error' ? '#ef4444' :
+                        event.type === 'warning' ? '#f59e0b' : '#64748b'
+                      }`
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                        <span style={{ color: '#475569', flex: 1 }}>{event.message}</span>
+                        <span style={{ color: '#94a3b8', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
+                          {new Date(event.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
