@@ -9,11 +9,11 @@ postgres:
   storage: 1Gi
 
 backend:
-  image: docker.io/library/medusa-backend:local
+  image: adc47/medusa-backend:local
   port: 9000
 
 storefront:
-  image: docker.io/library/medusa-storefront:local
+  image: adc47/medusa-storefront:local
   port: 8000
 
 
@@ -29,3 +29,12 @@ bootstrap:
     name: US
     currency: usd
     country: US
+
+resourceQuota:
+  enabled: false
+
+limitRange:
+  enabled: false
+
+networkPolicy:
+  enabled: false

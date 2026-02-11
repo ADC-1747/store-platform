@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: medusa-storefront
 spec:
-  replicas: 1
+  replicas: {{ .Values.storefront.replicas | default 1 }}
   selector:
     matchLabels:
       app: medusa-storefront
@@ -12,18 +12,70 @@ spec:
       labels:
         app: medusa-storefront
     spec:
+      serviceAccountName: medusa-storefront-sa
+      initContainers:
+        - name: wait-for-config
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "⏳ Waiting for ConfigMap medusa-storefront-config..."
+              MAX_WAIT=30
+              WAITED=0
+              TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+              CA_FILE=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              API_URL="https://kubernetes.default.svc/api/v1/namespaces/{{ .Release.Namespace }}/configmaps/medusa-storefront-config"
+              
+              while [ $WAITED -lt $MAX_WAIT ]; do
+                TOKEN=$(cat $TOKEN_FILE 2>/dev/null)
+                if [ -n "$TOKEN" ]; then
+                  RESPONSE=$(curl -sSf --cacert "$CA_FILE" \
+                    --header "Authorization: Bearer $TOKEN" \
+                    --header "Accept: application/json" \
+                    "$API_URL" 2>/dev/null)
+                  
+                  if echo "$RESPONSE" | grep -q "NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY" && echo "$RESPONSE" | grep -q '"pk_'; then
+                    echo "✅ ConfigMap ready with publishable key"
+                    exit 0
+                  fi
+                fi
+                
+                # Check more frequently at first, then less frequently
+                if [ $WAITED -lt 6 ]; then
+                  sleep 1
+                  WAITED=$((WAITED + 1))
+                else
+                  echo "ConfigMap not ready, waiting... ($WAITED/$MAX_WAIT seconds)"
+                  sleep 2
+                  WAITED=$((WAITED + 2))
+                fi
+              done
+              echo "⚠️  WARNING: ConfigMap not found after $MAX_WAIT seconds, continuing anyway..."
       containers:
         - name: storefront
           image: {{ .Values.storefront.image }}
-          imagePullPolicy: IfNotPresent
-          command: ["npm", "run", "dev", "--", "-p", "8000"]
+          imagePullPolicy: {{ .Values.storefront.imagePullPolicy | default "IfNotPresent" }}
+          command: ["npm", "run", "dev", "--", "-p", "{{ .Values.storefront.port }}"]
 
           env:
             - name: NODE_ENV
-              value: production
+              value: {{ .Values.storefront.nodeEnv | default "production" | quote }}
 
             - name: MEDUSA_BACKEND_URL
               value: http://medusa-backend:{{ .Values.backend.port }}
+
+            - name: NEXT_PUBLIC_BACKEND_URL
+              {{- if and .Values.store .Values.store.backendUrl }}
+              value: {{ .Values.store.backendUrl | quote }}
+              {{- else }}
+              {{- $backendHost := include "store-medusa.backendHost" . }}
+              {{- $protocol := "http" }}
+              {{- if and .Values.ingress .Values.ingress.tls }}
+              {{- $protocol = "https" }}
+              {{- end }}
+              value: {{ printf "%s://%s" $protocol $backendHost | quote }}
+              {{- end }}
 
             - name: NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
               valueFrom:
@@ -32,13 +84,18 @@ spec:
                   key: NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
 
             - name: NEXT_PUBLIC_DISABLE_STRIPE
-              value: "true"
+              value: {{ .Values.storefront.disableStripe | default "true" | quote }}
 
             - name: NEXT_PUBLIC_MEDUSA_DISABLE_SSG
-              value: "true"
+              value: {{ .Values.storefront.disableSSG | default "true" | quote }}
 
             - name: NEXT_BUILD_IGNORE_API_ERRORS
-              value: "true"
+              value: {{ .Values.storefront.ignoreApiErrors | default "true" | quote }}
 
           ports:
             - containerPort: {{ .Values.storefront.port }}
+
+          {{- if .Values.storefront.resources }}
+          resources:
+            {{- toYaml .Values.storefront.resources | nindent 12 }}
+          {{- end }}

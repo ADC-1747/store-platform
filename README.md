@@ -12,7 +12,7 @@ This platform allows users to instantly provision fully isolated e-commerce stor
 - **Automated Provisioning**: One-click store creation via Helm.
 - **Resource isolation**: Dedicated `ResourceQuota` and `LimitRange` per namespace.
 - **Auto-Bootstrapping**: MedusaJS stores automatically install all dependencies and seed the database on initialization.
-- **Local-First Architecture**: Powered by Kind (Kubernetes in Docker).
+- **Consistent Ingress**: Uses Traefik for both local and production environments.
 
 ---
 
@@ -45,17 +45,26 @@ Ensure you have the following installed:
 ## 🚦 Getting Started
 
 ### 1. Setup Local Cluster
-Create the Kind cluster with Ingress support:
+
+**For k3d (Recommended - matches production k3s):**
 ```bash
-kind create cluster --config kind-config.yaml
+./k3d-setup.sh
+./k3d-install-traefik.sh
 ```
 
-### 2. Install Ingress Controller
-Deploy the Nginx Ingress Controller:
+**For Kind:**
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+kind create cluster --config kind-config.yaml
+# Install Traefik ingress controller (see k3d-install-traefik.sh for reference)
 ```
-*Wait for the ingress-nginx pods to be Ready.*
+
+**For Minikube:**
+```bash
+minikube start
+minikube addons enable ingress
+```
+
+**Note**: All local environments use Traefik ingress controller for consistency with production.
 
 ### 3. Start the Backend
 ```bash
@@ -72,6 +81,37 @@ npm install
 npm run dev
 ```
 Open `http://localhost:5173` to start provisioning stores!
+
+---
+
+## 🌍 Environment-Specific Deployment
+
+This platform supports both **local** and **production** deployments using environment-specific Helm values files:
+
+- **`values-local.yaml`**: Optimized for local Kind clusters with nip.io domains
+- **`values-prod.yaml`**: Production-ready configuration for k3s on VPS with TLS/SSL
+
+### Quick Deploy
+
+**Local (default):**
+```bash
+# Via API (dashboard automatically uses local)
+POST /api/stores { "name": "my-store", "type": "woocommerce" }
+
+# Via Helm
+helm install my-store ./store-woocommerce -f store-woocommerce/values-local.yaml
+```
+
+**Production:**
+```bash
+# Via API
+POST /api/stores { "name": "my-store", "type": "woocommerce", "environment": "prod" }
+
+# Via Helm
+helm install my-store ./store-woocommerce -f store-woocommerce/values-prod.yaml
+```
+
+📖 **See [ENVIRONMENT_VALUES.md](./ENVIRONMENT_VALUES.md) for detailed documentation.**
 
 ---
 

@@ -1,37 +1,39 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: mariadb
+  name: {{ include "store-woocommerce.fullname" . }}-mariadb
+  labels:
+    {{- include "store-woocommerce.labels" . | nindent 4 }}
 spec:
-  serviceName: mariadb
+  serviceName: {{ include "store-woocommerce.fullname" . }}-mariadb
   replicas: 1
   selector:
     matchLabels:
-      app: mariadb
+      {{- include "store-woocommerce.selectorLabelsMariadb" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: mariadb
+        {{- include "store-woocommerce.selectorLabelsMariadb" . | nindent 8 }}
     spec:
       containers:
         - name: mariadb
-          image: mariadb:10.6
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
           args:
             - "--skip-ssl"
           env:
             - name: MYSQL_DATABASE
               value: wordpress
             - name: MYSQL_USER
-              value: wpuser
+              value: {{ .Values.mariadb.auth.username }}
             - name: MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mariadb-secret
+                  name: {{ include "store-woocommerce.mariadbSecretName" . }}
                   key: password
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mariadb-secret
+                  name: {{ include "store-woocommerce.mariadbSecretName" . }}
                   key: root-password
           ports:
             - containerPort: 3306
@@ -39,17 +41,15 @@ spec:
             - name: data
               mountPath: /var/lib/mysql
           resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 250m
-              memory: 512Mi
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
   volumeClaimTemplates:
     - metadata:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- if .Values.mariadb.storageClass }}
+        storageClassName: {{ .Values.mariadb.storageClass }}
+        {{- end }}
         resources:
           requests:
-            storage: 1Gi
+            storage: {{ .Values.mariadb.storage }}

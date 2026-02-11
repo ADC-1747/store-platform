@@ -1,0 +1,57 @@
+# k3d Test Environment Values
+# This file simulates production k3s setup but adapted for local k3d testing
+# Use with: helm install <name> ./store-woocommerce -f values-k3d-test.yaml
+
+fullnameOverride: "test-store"
+
+# Ingress configuration - using Traefik like production k3s
+ingress:
+  enabled: true
+  className: "traefik"  # k3s default ingress controller
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+  hosts:
+    - host: "test-store.127.0.0.1.nip.io"
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []  # Disable TLS for local testing
+
+# Wordpress configuration
+wordpress:
+  storage: 10Gi
+  storageClass: "local-path"  # k3s default storage class
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# MariaDB configuration
+mariadb:
+  storage: 5Gi
+  storageClass: "local-path"  # k3s default storage class
+  auth:
+    username: wpuser
+    password: wp_pass
+    rootPassword: root_pass
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Resource configuration for other components
+resources: {}
+
+# Autoscaling like production
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80

@@ -1,0 +1,12 @@
+{{- if and .Values.limitRange .Values.limitRange.enabled -}}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "store-medusa.fullname" . }}-limits
+  labels:
+    {{- include "store-medusa.labels" . | nindent 4 }}
+spec:
+  limits:
+    {{- toYaml .Values.limitRange.limits | nindent 4 }}
+{{- end }}
+

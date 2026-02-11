@@ -1,17 +1,22 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: wc-bootstrap
+  name: {{ include "store-woocommerce.fullname" . }}-bootstrap
+  labels:
+    {{- include "store-woocommerce.labels" . | nindent 4 }}
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels:
+        {{- include "store-woocommerce.labels" . | nindent 8 }}
     spec:
       restartPolicy: OnFailure
 
       volumes:
         - name: wordpress-data
           persistentVolumeClaim:
-            claimName: wordpress-data
+            claimName: {{ include "store-woocommerce.fullname" . }}-wordpress-data
       initContainers:
         - name: fix-permissions
           image: busybox:1.36
@@ -42,13 +47,13 @@ spec:
 
           env:
             - name: WORDPRESS_DB_HOST
-              value: mariadb:3306
+              value: {{ include "store-woocommerce.fullname" . }}-mariadb:3306
             - name: WORDPRESS_DB_USER
-              value: wpuser
+              value: {{ .Values.mariadb.auth.username }}
             - name: WORDPRESS_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mariadb-secret
+                  name: {{ include "store-woocommerce.mariadbSecretName" . }}
                   key: password
             - name: WORDPRESS_DB_NAME
               value: wordpress
@@ -148,13 +153,26 @@ spec:
               done
 
               echo "🚀 Installing WordPress..."
+              {{- $storeUrl := "" }}
+              {{- if .Values.ingress.hosts }}
+              {{- $storeUrl = (index .Values.ingress.hosts 0).host }}
+              {{- else if .Values.store.domain }}
+              {{- $storeUrl = .Values.store.domain }}
+              {{- else }}
+              {{- $storeUrl = printf "%s.127.0.0.1.nip.io" .Release.Name }}
+              {{- end }}
+              {{- $protocol := "http" }}
+              {{- if .Values.ingress.tls }}
+              {{- $protocol = "https" }}
+              {{- end }}
+              {{- $fullUrl := printf "%s://%s" $protocol $storeUrl }}
               if ! wp core is-installed --allow-root 2>/dev/null; then
                 wp core install \
-                  --url="http://{{ .Release.Name }}.127.0.0.1.nip.io" \
+                  --url="{{ $fullUrl }}" \
                   --title="Woo Store" \
                   --admin_user=admin \
                   --admin_password=admin123 \
-                  --admin_email=admin@example.com \
+                  --admin_email={{ include "store-woocommerce.adminEmail" . | quote }} \
                   --skip-email \
                   --allow-root
               fi
@@ -203,15 +221,15 @@ spec:
 
               # Configure permalinks and URLs
               echo "🔧 Configuring permalinks and URLs..."
-              wp option update home "http://{{ .Release.Name }}.127.0.0.1.nip.io" --allow-root
-              wp option update siteurl "http://{{ .Release.Name }}.127.0.0.1.nip.io" --allow-root
+              wp option update home "{{ $fullUrl }}" --allow-root
+              wp option update siteurl "{{ $fullUrl }}" --allow-root
               wp rewrite structure '/%postname%/' --allow-root
               wp rewrite flush --allow-root
 
               echo "✅ WooCommerce bootstrap complete"
               echo ""
               echo "🎉 Your WooCommerce store is ready!"
-              echo "   URL: http://{{ .Release.Name }}.127.0.0.1.nip.io"
-              echo "   Admin: http://{{ .Release.Name }}.127.0.0.1.nip.io/wp-admin"
+              echo "   URL: {{ $fullUrl }}"
+              echo "   Admin: {{ $fullUrl }}/wp-admin"
               echo "   Username: admin"
               echo "   Password: admin123"

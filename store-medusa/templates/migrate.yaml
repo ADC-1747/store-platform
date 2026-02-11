@@ -27,7 +27,7 @@ spec:
               npm run seed || echo "Seeding failed or already done, continuing"
               echo "👤 Creating admin user (idempotent)"
               npx medusa user \
-                --email {{ .Values.admin.email }} \
+                --email {{ include "store-medusa.adminEmail" . | quote }} \
                 --password {{ .Values.admin.password }} \
               || echo "Admin already exists, continuing"
 

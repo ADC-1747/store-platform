@@ -14,7 +14,9 @@ spec:
       restartPolicy: Never
       containers:
         - name: extract-key
-          image: ubuntu:22.04
+          # image: ubuntu:22.04
+          image: adc47/medusa-bootstrap:ubuntu-22.04
+          imagePullPolicy: Always
           env:
             - name: PGPASSWORD
               value: {{ .Values.postgres.password }}
@@ -24,14 +26,29 @@ spec:
             - |
               set -e
 
-              echo "🔑 Installing required packages"
-              apt-get update
-              apt-get install -y postgresql-client curl ca-certificates
+              echo "🔑 Waiting for Postgres to be ready..."
+              until pg_isready -h postgres -U {{ .Values.postgres.user }}; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
 
-              echo "🔑 Installing kubectl"
-              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-              chmod +x kubectl
-              mv kubectl /usr/local/bin/
+              echo "🔑 Waiting for migrations to complete (checking for api_key table)..."
+              MAX_RETRIES=30
+              RETRY=0
+              while [ $RETRY -lt $MAX_RETRIES ]; do
+                if psql -h postgres -U {{ .Values.postgres.user }} -d {{ .Values.postgres.database }} -c "\dt api_key" 2>&1 | grep -q "api_key"; then
+                  echo "✅ api_key table exists"
+                  break
+                fi
+                echo "Waiting for api_key table... ($RETRY/$MAX_RETRIES)"
+                sleep 2
+                RETRY=$((RETRY + 1))
+              done
+
+              if [ $RETRY -eq $MAX_RETRIES ]; then
+                echo "❌ ERROR: api_key table not found after $MAX_RETRIES retries"
+                exit 1
+              fi
 
               echo "🔑 Extracting publishable key from Postgres"
               PKEY=$(psql \
@@ -39,14 +56,32 @@ spec:
                 -U {{ .Values.postgres.user }} \
                 -d {{ .Values.postgres.database }} \
                 -t -A \
-                -c "SELECT token FROM api_key WHERE type='publishable' LIMIT 1;")
+                -c "SELECT token FROM api_key WHERE type='publishable' LIMIT 1;" 2>&1)
 
-              echo "Publishable key: $PKEY"
+              if [ -z "$PKEY" ] || [ "$PKEY" = "" ]; then
+                echo "❌ ERROR: Publishable key not found in database"
+                echo "Checking api_key table contents:"
+                psql -h postgres -U {{ .Values.postgres.user }} -d {{ .Values.postgres.database }} -c "SELECT type, token FROM api_key LIMIT 5;" || true
+                exit 1
+              fi
 
-              echo "🔑 Creating ConfigMap medusa-storefront-config"
+              # Remove any whitespace/newlines
+              PKEY=$(echo "$PKEY" | tr -d '[:space:]')
+
+              if [ -z "$PKEY" ] || [ ${#PKEY} -lt 10 ]; then
+                echo "❌ ERROR: Invalid publishable key (too short or empty)"
+                exit 1
+              fi
+
+              echo "✅ Publishable key extracted: ${PKEY:0:20}..."
+
+              echo "🔑 Creating/updating ConfigMap medusa-storefront-config"
               kubectl create configmap medusa-storefront-config \
                 --namespace {{ .Release.Namespace }} \
                 --from-literal=NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY="$PKEY" \
                 --dry-run=client -o yaml | kubectl apply -f -
 
-              echo "✅ Publishable key stored"
+              echo "✅ Publishable key stored in ConfigMap"
+
+              echo "🔑 Restarting storefront pods to pick up new ConfigMap..."
+              kubectl rollout restart deployment medusa-storefront -n {{ .Release.Namespace }} || echo "⚠️  Could not restart storefront (may not exist yet)"

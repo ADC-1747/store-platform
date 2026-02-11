@@ -6,7 +6,13 @@ const API_BASE = 'http://localhost:3001/api';
 function App() {
   const [stores, setStores] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newStore, setNewStore] = useState({ name: '', type: 'woocommerce' });
+  const [newStore, setNewStore] = useState({ 
+    name: '', 
+    type: 'woocommerce', 
+    domain: '', 
+    adminEmail: '',
+    showAdvanced: false 
+  });
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -29,14 +35,26 @@ function App() {
     e.preventDefault();
     setIsLoading(true);
     try {
+      // Only send optional fields if they have values
+      const payload = { 
+        name: newStore.name,
+        type: newStore.type
+      };
+      if (newStore.domain && newStore.domain.trim() !== '') {
+        payload.domain = newStore.domain.trim();
+      }
+      if (newStore.adminEmail && newStore.adminEmail.trim() !== '') {
+        payload.adminEmail = newStore.adminEmail.trim();
+      }
+      console.log('Sending store creation request:', payload);
       const resp = await fetch(`${API_BASE}/stores`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newStore)
+        body: JSON.stringify(payload)
       });
       if (resp.ok) {
         setIsModalOpen(false);
-        setNewStore({ name: '', type: 'woocommerce' });
+        setNewStore({ name: '', type: 'woocommerce', domain: '', adminEmail: '', showAdvanced: false });
         fetchStores();
       } else {
         const errorData = await resp.json();
@@ -78,7 +96,7 @@ function App() {
               {store.status}
             </span>
             <div className="store-name">{store.name}</div>
-            <div className="store-meta">{store.type} • {new Date(store.createdAt).toLocaleDateString()}</div>
+            <div className="store-meta">{store.type} • {store.environment || 'local'} • {new Date(store.createdAt).toLocaleDateString()}</div>
 
             <div className="store-actions">
               {store.status === 'Ready' && (
@@ -130,6 +148,60 @@ function App() {
                   <option value="medusa">MedusaJS (Full Stack)</option>
                 </select>
               </div>
+              <div className="form-group">
+                <label>Domain (Optional - for production)</label>
+                <input
+                  type="text"
+                  value={newStore.domain}
+                  onChange={e => setNewStore({ ...newStore, domain: e.target.value })}
+                  placeholder="e.g. example.com (leave empty to use default)"
+                />
+                <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
+                  Only used in production environment. Leave empty to use default from backend config.
+                </small>
+              </div>
+
+              <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setNewStore({ ...newStore, showAdvanced: !newStore.showAdvanced })}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#64748b',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    textDecoration: 'underline',
+                    padding: 0
+                  }}
+                >
+                  {newStore.showAdvanced ? '▼' : '▶'} Advanced Options
+                </button>
+              </div>
+
+              {newStore.showAdvanced && (
+                <div style={{ 
+                  padding: '1rem', 
+                  background: '#f8fafc', 
+                  borderRadius: '8px', 
+                  marginBottom: '1rem',
+                  border: '1px solid #e2e8f0'
+                }}>
+                  <div className="form-group">
+                    <label>Admin Email (Optional)</label>
+                    <input
+                      type="email"
+                      value={newStore.adminEmail}
+                      onChange={e => setNewStore({ ...newStore, adminEmail: e.target.value })}
+                      placeholder="e.g. admin@example.com (auto-generated from domain if empty)"
+                    />
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
+                      Admin user email. If empty, will be auto-generated as admin@&lt;domain&gt;
+                    </small>
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
                 <button type="button" className="btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
                 <button type="submit" className="btn-primary" disabled={isLoading}>

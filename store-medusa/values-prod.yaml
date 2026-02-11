@@ -1,0 +1,153 @@
+# Production environment values for Medusa store
+# Use with: helm install <name> ./store-medusa -f store-medusa/values-prod.yaml
+
+# Store configuration
+store:
+  name: "medusa-prod"
+  # Domain will be set by backend via --set store.domain=<store-name>.<domain>
+  # Format: <store-name>.<your-domain> (e.g., "my-store.example.com")
+  domain: ""  # Set by backend during provisioning
+  backendUrl: ""  # Optional: Override backend URL (auto-generated from domain if not set)
+
+# PostgreSQL configuration for production
+postgres:
+  user: medusa
+  # IMPORTANT: Password MUST be provided via --set or external secrets
+  # DO NOT hardcode production passwords
+  password: ""  # Override via --set postgres.password=<secure-password>
+  database: medusa
+  storage: 20Gi
+  storageClass: "local-path"  # k3s default
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+# Backend configuration for production
+backend:
+  image: adc47/medusa-backend:latest  # Replace with your registry
+  imagePullPolicy: Always
+  port: 9000
+  replicas: 2
+  nodeEnv: production
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "1000m"
+    limits:
+      memory: "8Gi"
+      cpu: "2000m"
+
+# Storefront configuration for production
+storefront:
+  image: adc47/medusa-storefront:latest  # Replace with your registry
+  imagePullPolicy: Always
+  port: 8000
+  replicas: 2
+  nodeEnv: production
+  disableStripe: "false"  # Enable Stripe in production
+  disableSSG: "false"  # Enable SSG in production
+  ignoreApiErrors: "false"  # Fail on API errors in production
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
+# Admin user for production
+admin:
+  # Email will be auto-generated from store.domain if not provided
+  # Format: admin@<domain> (e.g., if domain is "store.example.com", email becomes "admin@example.com")
+  # Override via --set admin.email=<custom-email> if needed
+  email: ""  # Auto-generated from store.domain, or override via --set
+  # IMPORTANT: Password MUST be provided via --set or external secrets
+  password: ""  # Override via --set admin.password=<secure-password>
+  firstName: Admin
+  lastName: User
+
+# Bootstrap configuration
+bootstrap:
+  region:
+    name: US
+    currency: usd
+    country: US
+
+# Ingress configuration for production with TLS
+ingress:
+  enabled: true
+  className: "traefik"  # k3s default
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  # Hosts will be auto-generated from store.domain if not specified
+  # Format: storefront = store.domain, backend = store.domain-api
+  hosts: []  # Auto-generated from store.domain
+  tls:
+    - secretName: ""  # Will be set by backend: <release-name>-tls
+      hosts:
+        - ""  # Will be overridden by backend via --set ingress.tls[0].hosts[0]
+
+# Autoscaling enabled for production
+autoscaling:
+  enabled: true
+  backend:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+  storefront:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Resource quota for production (enabled by default for multi-tenant isolation)
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "2000m"
+    requests.memory: "4Gi"
+    limits.cpu: "4000m"
+    limits.memory: "8Gi"
+    pods: "10"
+    services: "6"
+    persistentvolumeclaims: "3"
+    requests.storage: "50Gi"
+
+# Limit range for production (enabled by default for resource guardrails)
+limitRange:
+  enabled: true
+  limits:
+  - default:
+      cpu: "1000m"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "200m"
+      memory: "512Mi"
+    type: Container
+
+# Network policy for production (enabled by default for network isolation)
+networkPolicy:
+  enabled: true
+
+# Security settings for production
+security:
+  # JWT and Cookie secrets MUST be provided via --set or external secrets
+  jwtSecret: ""  # Override via --set security.jwtSecret=<secure-random-string>
+  cookieSecret: ""  # Override via --set security.cookieSecret=<secure-random-string>
+  
+# CORS settings for production
+# Will be auto-generated from store.domain if not provided
+# Override via --set if needed
+cors:
+  storeCors: ""  # Auto-generated from store.domain (https://<store.domain>)
+  adminCors: ""  # Auto-generated from store.domain (https://admin.<store.domain>)
+  authCors: ""  # Auto-generated from store.domain (https://<store.domain>)

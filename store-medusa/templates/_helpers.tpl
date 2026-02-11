@@ -60,3 +60,93 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Extract domain from store.domain for admin email
+Example: "store.example.com" -> "example.com"
+*/}}
+{{- define "store-medusa.adminEmailDomain" -}}
+{{- if .Values.admin.email }}
+{{- /* If admin.email is explicitly set, extract domain from it */}}
+{{- $parts := splitList "@" .Values.admin.email }}
+{{- if eq (len $parts) 2 }}
+{{- index $parts 1 }}
+{{- else }}
+{{- /* Fallback: extract from store.domain */}}
+{{- $domainParts := splitList "." .Values.store.domain }}
+{{- $domainLen := len $domainParts }}
+{{- if gt $domainLen 1 }}
+{{- join "." (last 2 $domainParts) }}
+{{- else }}
+{{- "example.com" }}
+{{- end }}
+{{- end }}
+{{- else }}
+{{- /* Extract domain from store.domain */}}
+{{- $domainParts := splitList "." .Values.store.domain }}
+{{- $domainLen := len $domainParts }}
+{{- if gt $domainLen 1 }}
+{{- join "." (last 2 $domainParts) }}
+{{- else }}
+{{- "example.com" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generate admin email from store domain or use provided email
+*/}}
+{{- define "store-medusa.adminEmail" -}}
+{{- if .Values.admin.email }}
+{{- .Values.admin.email }}
+{{- else }}
+{{- $domain := include "store-medusa.adminEmailDomain" . }}
+{{- printf "admin@%s" $domain }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get storefront host from ingress hosts or construct from store.domain
+*/}}
+{{- define "store-medusa.storefrontHost" -}}
+{{- $host := "" }}
+{{- if and .Values.ingress .Values.ingress.hosts }}
+{{- range .Values.ingress.hosts }}
+{{- if eq .name "storefront" }}
+{{- $host = .host }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $host }}
+{{- if .Values.store.domain }}
+{{- $host = .Values.store.domain }}
+{{- else }}
+{{- $host = printf "%s.127.0.0.1.nip.io" .Release.Name }}
+{{- end }}
+{{- end }}
+{{- $host }}
+{{- end }}
+
+{{/*
+Get backend API host from ingress hosts or construct from store.domain
+*/}}
+{{- define "store-medusa.backendHost" -}}
+{{- $host := "" }}
+{{- if and .Values.ingress .Values.ingress.hosts }}
+{{- range .Values.ingress.hosts }}
+{{- if eq .name "backend" }}
+{{- $host = .host }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $host }}
+{{- if .Values.store.domain }}
+{{- /* Extract base domain: replace first part with {release-name}-api */}}
+{{- /* Use regex to replace everything up to the first dot with {release-name}-api */}}
+{{- $host = regexReplaceAll "^[^.]+" .Values.store.domain (printf "%s-api" .Release.Name) }}
+{{- else }}
+{{- $host = printf "%s-api.127.0.0.1.nip.io" .Release.Name }}
+{{- end }}
+{{- end }}
+{{- $host }}
+{{- end }}

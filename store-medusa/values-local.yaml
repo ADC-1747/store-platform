@@ -1,0 +1,123 @@
+# Local environment values for Medusa store
+# Use with: helm install <name> ./store-medusa -f store-medusa/values-local.yaml
+
+# Store configuration
+store:
+  name: "medusa-local"
+  # Domain will be set by backend via --set store.domain=<store-name>.127.0.0.1.nip.io
+  domain: ""  # Set by backend during provisioning
+
+# PostgreSQL configuration for local
+postgres:
+  user: medusa
+  # Password should be provided via --set or external secrets in production
+  password: "medusa123"  # Local only - override for production
+  database: medusa
+  storage: 1Gi
+  storageClass: ""  # Use cluster default (standard for Kind, local-path for k3d/k3s)
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Backend configuration for local
+backend:
+  image: adc47/medusa-backend:local
+  imagePullPolicy: Always
+  port: 9000
+  replicas: 1
+  nodeEnv: production
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "1000m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# Storefront configuration for local
+storefront:
+  image: adc47/medusa-storefront:local
+  imagePullPolicy: Always
+  port: 8000
+  replicas: 1
+  nodeEnv: development
+  disableStripe: "true"
+  disableSSG: "true"
+  ignoreApiErrors: "true"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "1000m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# Admin user for local development
+admin:
+  # Email will be auto-generated from store.domain if not provided
+  # For local: defaults to admin@127.0.0.1.nip.io (or override via --set)
+  email: ""  # Auto-generated from store.domain, or override via --set admin.email=<custom-email>
+  password: "supersecret"  # Local only - override for production
+  firstName: Admin
+  lastName: User
+
+# Bootstrap configuration
+bootstrap:
+  region:
+    name: US
+    currency: usd
+    country: US
+
+# Security settings for local (defaults for dev only)
+security:
+  jwtSecret: "supersecret"  # Local dev only - MUST override in production
+  cookieSecret: "supersecret"  # Local dev only - MUST override in production
+
+# CORS settings for local
+cors:
+  storeCors: "*"
+  adminCors: "*"
+  authCors: "*"
+
+# Ingress configuration for local (Traefik)
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+  # Hosts will be auto-generated from store.domain if not specified
+  hosts: []  # Auto-generated from store.domain
+  tls: []
+
+# Autoscaling disabled for local
+autoscaling:
+  enabled: false
+
+# Resource quota for local (optional - can be enabled for testing)
+resourceQuota:
+  enabled: false
+  hard:
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1000m"
+    limits.memory: "2Gi"
+    pods: "4"
+    services: "4"
+    persistentvolumeclaims: "2"
+    requests.storage: "5Gi"
+
+# Limit range for local (optional - can be enabled for testing)
+limitRange:
+  enabled: false
+  limits:
+  - default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "256Mi"
+    type: Container

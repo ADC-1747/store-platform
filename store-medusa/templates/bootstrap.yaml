@@ -17,7 +17,7 @@
 #               value: http://medusa-backend:9000
 
 #             - name: ADMIN_EMAIL
-#               value: {{ .Values.admin.email | quote }}
+#               value: {{ include "store-medusa.adminEmail" . | quote }}
 #             - name: ADMIN_PASSWORD
 #               value: {{ .Values.admin.password | quote }}
 

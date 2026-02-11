@@ -1,0 +1,21 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: store-provisioner
+  namespace: default
+  labels:
+    app: store-provisioner
+rules:
+# Allow creating and managing namespaces for stores
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["create", "get", "list", "delete"]
+# Allow creating and managing secrets in store namespaces
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "get", "list", "update", "delete"]
+# Allow reading storage classes (needed to detect cluster type)
+- apiGroups: [""]
+  resources: ["storageclasses"]
+  verbs: ["get", "list"]
+

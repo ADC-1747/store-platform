@@ -1,0 +1,19 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: store-provisioner
+  labels:
+    app: store-provisioner
+rules:
+# Allow creating and managing namespaces (cluster-scoped)
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["create", "get", "list", "delete"]
+# Allow reading storage classes (cluster-scoped)
+- apiGroups: [""]
+  resources: ["storageclasses"]
+  verbs: ["get", "list"]
+# Allow managing Helm releases via Tiller (if using Helm v2) or direct API access
+# For Helm v3, we use exec which requires kubectl access
+# Note: In production, consider using Helm SDK instead of exec for better security
+

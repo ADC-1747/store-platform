@@ -1,10 +1,17 @@
+{{- if .Values.wordpress.persistence.enabled -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: wordpress-data
+  name: {{ include "store-woocommerce.fullname" . }}-wordpress-data
+  labels:
+    {{- include "store-woocommerce.labels" . | nindent 4 }}
 spec:
   accessModes:
     - ReadWriteOnce
+  {{- if .Values.wordpress.storageClass }}
+  storageClassName: {{ .Values.wordpress.storageClass }}
+  {{- end }}
   resources:
     requests:
-      storage: 1Gi
+      storage: {{ .Values.wordpress.storage }}
+{{- end }}

@@ -1,13 +1,11 @@
+{{- if .Values.limitRange.enabled -}}
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: store-limits
+  name: {{ include "store-woocommerce.fullname" . }}-limits
+  labels:
+    {{- include "store-woocommerce.labels" . | nindent 4 }}
 spec:
   limits:
-  - default:
-      cpu: "500m"
-      memory: "512Mi"
-    defaultRequest:
-      cpu: "100m"
-      memory: "256Mi"
-    type: Container
+    {{- toYaml .Values.limitRange.limits | nindent 4 }}
+{{- end }}

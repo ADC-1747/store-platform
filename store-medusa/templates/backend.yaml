@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: medusa-backend
 spec:
-  replicas: 1
+  replicas: {{ .Values.backend.replicas | default 1 }}
   selector:
     matchLabels:
       app: medusa-backend
@@ -15,24 +15,62 @@ spec:
       containers:
         - name: medusa
           image: {{ .Values.backend.image }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.backend.imagePullPolicy | default "IfNotPresent" }}
           command: ["npm", "run", "start"]
           env:
             - name: DATABASE_URL
               value: postgres://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.database }}?sslmode=disable
 
             - name: JWT_SECRET
-              value: supersecret
+              {{- if and .Values.security .Values.security.jwtSecret }}
+              value: {{ .Values.security.jwtSecret | quote }}
+              {{- else }}
+              value: "supersecret"  # WARNING: Default for local dev only - MUST override in production
+              {{- end }}
             - name: COOKIE_SECRET
-              value: supersecret
+              {{- if and .Values.security .Values.security.cookieSecret }}
+              value: {{ .Values.security.cookieSecret | quote }}
+              {{- else }}
+              value: "supersecret"  # WARNING: Default for local dev only - MUST override in production
+              {{- end }}
             - name: NODE_ENV
-              value: production
+              value: {{ .Values.backend.nodeEnv | default "production" | quote }}
             - name: STORE_CORS
-              value: "*"
+              {{- if and .Values.cors .Values.cors.storeCors }}
+              value: {{ .Values.cors.storeCors | quote }}
+              {{- else }}
+              {{- /* Auto-generate from store.domain */}}
+              {{- $storefrontHost := include "store-medusa.storefrontHost" . }}
+              {{- $protocol := "http" }}
+              {{- if and .Values.ingress .Values.ingress.tls }}
+              {{- $protocol = "https" }}
+              {{- end }}
+              value: {{ printf "%s://%s" $protocol $storefrontHost | quote }}
+              {{- end }}
             - name: ADMIN_CORS
-              value: "*"
+              {{- if and .Values.cors .Values.cors.adminCors }}
+              value: {{ .Values.cors.adminCors | quote }}
+              {{- else }}
+              {{- /* Auto-generate from store.domain */}}
+              {{- $backendHost := include "store-medusa.backendHost" . }}
+              {{- $protocol := "http" }}
+              {{- if and .Values.ingress .Values.ingress.tls }}
+              {{- $protocol = "https" }}
+              {{- end }}
+              value: {{ printf "%s://%s" $protocol $backendHost | quote }}
+              {{- end }}
             - name: AUTH_CORS
-              value: "*"
+              {{- if and .Values.cors .Values.cors.authCors }}
+              value: {{ .Values.cors.authCors | quote }}
+              {{- else }}
+              {{- /* Auto-generate from store.domain */}}
+              {{- $storefrontHost := include "store-medusa.storefrontHost" . }}
+              {{- $protocol := "http" }}
+              {{- if and .Values.ingress .Values.ingress.tls }}
+              {{- $protocol = "https" }}
+              {{- end }}
+              value: {{ printf "%s://%s" $protocol $storefrontHost | quote }}
+              {{- end }}
 
           ports:
             - containerPort: {{ .Values.backend.port }}
@@ -44,6 +82,10 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
 
+          {{- if .Values.backend.resources }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          {{- else }}
           resources:
             requests:
               memory: "2Gi"
@@ -51,3 +93,4 @@ spec:
             limits:
               memory: "4Gi"
               cpu: "500m"
+          {{- end }}

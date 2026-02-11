@@ -1,16 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: wordpress
+  name: {{ include "store-woocommerce.fullname" . }}-wordpress
+  labels:
+    {{- include "store-woocommerce.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
-      app: wordpress
+      {{- include "store-woocommerce.selectorLabelsWordpress" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: wordpress
+        {{- include "store-woocommerce.selectorLabelsWordpress" . | nindent 8 }}
     spec:
       securityContext:
         fsGroup: 33
@@ -37,16 +41,16 @@ spec:
 
       containers:
         - name: wordpress
-          image: wordpress:6.8-apache
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           env:
             - name: WORDPRESS_DB_HOST
-              value: mariadb
+              value: {{ include "store-woocommerce.fullname" . }}-mariadb
             - name: WORDPRESS_DB_USER
-              value: wpuser
+              value: {{ .Values.mariadb.auth.username }}
             - name: WORDPRESS_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mariadb-secret
+                  name: {{ include "store-woocommerce.mariadbSecretName" . }}
                   key: password
             - name: WORDPRESS_DB_NAME
               value: wordpress
@@ -60,14 +64,17 @@ spec:
             - name: wordpress-data
               mountPath: /var/www/html
           resources:
-            requests:
-              cpu: 200m
-              memory: 512Mi
-            limits:
-              cpu: 400m
-              memory: 1Gi
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- end }}
 
       volumes:
         - name: wordpress-data
           persistentVolumeClaim:
-            claimName: wordpress-data
+            claimName: {{ include "store-woocommerce.fullname" . }}-wordpress-data
