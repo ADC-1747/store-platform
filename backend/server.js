@@ -113,10 +113,71 @@ const atomicUpdateStores = async (updateFn) => {
     }
 };
 
-// List stores
+// Refresh store status based on actual Kubernetes state
+async function refreshStoreStatus(store) {
+    // Don't refresh deleted or failed stores - they're in final states
+    if (store.status === 'Deleting' || store.status === 'Failed') {
+        return store;
+    }
+
+    const namespace = `store-${store.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+    
+    try {
+        // Check if namespace exists
+        const nsCheck = await execPromise(`kubectl get namespace ${namespace} 2>/dev/null || echo "notfound"`);
+        if (nsCheck.trim().includes('notfound')) {
+            if (store.status === 'Provisioning') {
+                // Namespace doesn't exist but store is provisioning - might have failed
+                return { ...store, status: 'Failed', error: 'Namespace not found' };
+            }
+            return store;
+        }
+
+        // Check if store is actually ready
+        const isReady = await checkStoreReady(store.name, namespace, store.type);
+        
+        if (isReady && store.status !== 'Ready') {
+            // Store is ready but status wasn't Ready - update it
+            console.log(`Refreshing store ${store.name}: Setting status to Ready`);
+            return { ...store, status: 'Ready', error: null };
+        } else if (!isReady && store.status === 'Ready') {
+            // Store was marked Ready but is not actually ready - revert to Provisioning
+            console.log(`Refreshing store ${store.name}: Reverting status from Ready to Provisioning (not actually ready)`);
+            return { ...store, status: 'Provisioning', error: null };
+        } else if (!isReady && store.status === 'Provisioning') {
+            // Store is still provisioning - keep status as is
+            return store;
+        }
+    } catch (error) {
+        console.error(`Error refreshing status for store ${store.name}:`, error);
+    }
+    
+    return store;
+}
+
+// List stores (with status refresh for provisioning stores)
 app.get('/api/stores', async (req, res) => {
     try {
-        const stores = await readStores();
+        let stores = await readStores();
+        
+        // Refresh status for stores that are provisioning or ready
+        const refreshPromises = stores
+            .filter(s => s.status === 'Provisioning' || s.status === 'Ready')
+            .map(store => refreshStoreStatus(store));
+        
+        const refreshedStores = await Promise.all(refreshPromises);
+        
+        // Update stores with refreshed statuses
+        if (refreshedStores.length > 0) {
+            await atomicUpdateStores((currentStores) => {
+                return currentStores.map(store => {
+                    const refreshed = refreshedStores.find(s => s.id === store.id);
+                    return refreshed || store;
+                });
+            });
+            stores = await readStores();
+        }
+        
         res.json(stores);
     } catch (error) {
         console.error('Error reading stores:', error);
@@ -205,39 +266,39 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
 
         const namespace = `store-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
-    // Determine values file based on environment parameter
-    // Assessment requirement: "Local vs production differences must be handled via Helm values"
-    // effectiveEnvironment already calculated above (request > backend default > 'local')
-    // - environment='local' -> values-local.yaml (works with Kind/k3d/Minikube)
-    // - environment='prod' -> values-prod.yaml (works with k3s VPS)
-    
-    let valuesFile = effectiveEnvironment === 'local' ? 'values-local.yaml' : 'values-prod.yaml';
-    
-    // Allow explicit override if needed (for testing/debugging)
-    if (requestedValuesFile) {
-        valuesFile = requestedValuesFile;
-        console.log(`Using explicitly requested values file: ${valuesFile}`);
-    } else {
-        console.log(`Using ${valuesFile} for ${effectiveEnvironment} environment (from .env: ${DEFAULT_ENVIRONMENT}${environment ? `, overridden by request: ${environment}` : ''})`);
-    }
-    
-    // Detect storage class for local deployments
-    // values-local.yaml uses empty storageClass (cluster default)
-    // Adapt to local-path for k3d/k3s if needed
-    let needsLocalPathStorage = false;
-    if (valuesFile === 'values-local.yaml') {
-        try {
-            const storageClassOutput = await execPromise('kubectl get storageclass -o jsonpath="{.items[*].metadata.name}" 2>/dev/null || echo ""');
-            if (storageClassOutput.includes('local-path')) {
-                needsLocalPathStorage = true;
-                console.log('Detected local-path storage class - will adapt storage classes');
-            }
-        } catch (error) {
-            console.warn('Could not detect storage class, using defaults:', error.message);
+        // Determine values file based on environment parameter
+        // Assessment requirement: "Local vs production differences must be handled via Helm values"
+        // effectiveEnvironment already calculated above (request > backend default > 'local')
+        // - environment='local' -> values-local.yaml (works with Kind/k3d/Minikube)
+        // - environment='prod' -> values-prod.yaml (works with k3s VPS)
+        
+        let valuesFile = effectiveEnvironment === 'local' ? 'values-local.yaml' : 'values-prod.yaml';
+        
+        // Allow explicit override if needed (for testing/debugging)
+        if (requestedValuesFile) {
+            valuesFile = requestedValuesFile;
+            console.log(`Using explicitly requested values file: ${valuesFile}`);
+        } else {
+            console.log(`Using ${valuesFile} for ${effectiveEnvironment} environment (from .env: ${DEFAULT_ENVIRONMENT}${environment ? `, overridden by request: ${environment}` : ''})`);
         }
-    }
-    
-    const valuesPath = path.join(ChartPath, valuesFile);
+        
+        // Detect storage class for local deployments
+        // values-local.yaml uses empty storageClass (cluster default)
+        // Adapt to local-path for k3d/k3s if needed
+        let needsLocalPathStorage = false;
+        if (valuesFile === 'values-local.yaml') {
+            try {
+                const storageClassOutput = await execPromise('kubectl get storageclass -o jsonpath="{.items[*].metadata.name}" 2>/dev/null || echo ""');
+                if (storageClassOutput.includes('local-path')) {
+                    needsLocalPathStorage = true;
+                    console.log('Detected local-path storage class - will adapt storage classes');
+                }
+            } catch (error) {
+                console.warn('Could not detect storage class, using defaults:', error.message);
+            }
+        }
+        
+        const valuesPath = path.join(ChartPath, valuesFile);
 
     try {
         // 1. Create namespace
@@ -297,6 +358,10 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                     helmCommand += ` --set backend.imagePullPolicy=IfNotPresent`;
                     helmCommand += ` --set storefront.image=docker.io/library/medusa-storefront:local`;
                     helmCommand += ` --set storefront.imagePullPolicy=IfNotPresent`;
+                    // Set default postgres password for local testing
+                    helmCommand += ` --set postgres.password=medusa123`;
+                    // Set default admin password for local testing
+                    helmCommand += ` --set admin.password=supersecret`;
                 }
                 helmCommand += ` --set ingress.tls=null`; // Disable TLS for local testing
                 // Admin email: use provided email or auto-generate from domain
@@ -325,8 +390,18 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                 const isNipIo = effectiveDomain && effectiveDomain.includes('nip.io');
                 
                 if (isNipIo) {
-                    // Disable TLS for nip.io domains (no valid certificates)
+                    // Disable TLS and annotations for nip.io domains (no valid certificates)
                     helmCommand += ` --set ingress.tls=null`;
+                    // Clear annotations that are set in values-prod.yaml for nip.io domains
+                    if (type === 'medusa') {
+                        helmCommand += ` --set ingress.annotations=null`;
+                        // Set default postgres password for local testing
+                        helmCommand += ` --set postgres.password=medusa123`;
+                        // Set default admin password for local testing
+                        helmCommand += ` --set admin.password=supersecret`;
+                    } else if (type === 'woocommerce') {
+                        helmCommand += ` --set ingress.annotations=null`;
+                    }
                     // Admin email: use provided email or auto-generate from domain
                     if (adminEmail && adminEmail.trim()) {
                         if (type === 'woocommerce') {
@@ -335,13 +410,15 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                             helmCommand += ` --set admin.email=${adminEmail.trim()}`;
                         }
                     }
-                    console.log(`Using production config with nip.io domain (TLS disabled): ${prodHost}`);
+                    console.log(`Using production config with nip.io domain (TLS and annotations disabled): ${prodHost}`);
                 } else {
                     // Real production domain - enable TLS with cert-manager
-                    // Enable cert-manager annotations for automatic certificate provisioning
+                    // Note: For Medusa, annotations are already set in values-prod.yaml, so we don't override them
+                    // Only set TLS hosts and domain
                     if (type === 'woocommerce') {
-                        helmCommand += ` --set ingress.annotations."cert-manager\.io/cluster-issuer"=letsencrypt-prod`;
-                        helmCommand += ` --set ingress.annotations."traefik\.ingress\.kubernetes\.io/router\.tls"=true`;
+                        // WooCommerce: Set annotations explicitly
+                        helmCommand += ` --set ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt-prod`;
+                        helmCommand += ` --set ingress.annotations.traefik\.ingress\.kubernetes\.io/router\.tls=true`;
                         helmCommand += ` --set ingress.tls[0].secretName=${name}-tls`;
                         helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
                         // Admin email: use provided email or auto-generate from domain
@@ -349,9 +426,8 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                             helmCommand += ` --set admin.email=${adminEmail.trim()}`;
                         }
                     } else if (type === 'medusa') {
-                        // Medusa uses template variables, need to override TLS hosts
-                        helmCommand += ` --set ingress.annotations."cert-manager\.io/cluster-issuer"=letsencrypt-prod`;
-                        helmCommand += ` --set ingress.annotations."traefik\.ingress\.kubernetes\.io/router\.tls"=true`;
+                        // Medusa: annotations already in values-prod.yaml, just set TLS hosts and domain
+                        // Don't override annotations to avoid YAML parse errors
                         helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
                         // Override store domain (used for auto-generating hosts, CORS, admin email)
                         helmCommand += ` --set store.domain=${prodHost}`;
@@ -370,14 +446,43 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
         console.log(`Using values file: ${valuesFile}`);
         await execPromise(helmCommand);
 
-        // Update status to Ready (atomic operation)
-        await atomicUpdateStores((stores) => {
-            const storeIndex = stores.findIndex(s => s.id === newStore.id);
-            if (storeIndex !== -1) {
-                stores[storeIndex].status = 'Ready';
+        // Wait for store to be truly ready (check every 10 seconds, max 10 minutes)
+        console.log(`Waiting for store ${name} to be ready...`);
+        // namespace is already declared above at line 266
+        let isReady = false;
+        const maxWaitTime = 10 * 60 * 1000; // 10 minutes
+        const checkInterval = 10 * 1000; // 10 seconds
+        const startTime = Date.now();
+
+        while (!isReady && (Date.now() - startTime) < maxWaitTime) {
+            isReady = await checkStoreReady(name, namespace, type);
+            if (!isReady) {
+                console.log(`Store ${name} not ready yet, waiting ${checkInterval/1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, checkInterval));
             }
-            return stores;
-        });
+        }
+
+        if (isReady) {
+            // Update status to Ready (atomic operation)
+            await atomicUpdateStores((stores) => {
+                const storeIndex = stores.findIndex(s => s.id === newStore.id);
+                if (storeIndex !== -1) {
+                    stores[storeIndex].status = 'Ready';
+                }
+                return stores;
+            });
+            console.log(`Store ${name} is now ready!`);
+        } else {
+            console.warn(`Store ${name} did not become ready within ${maxWaitTime/1000/60} minutes, but Helm install completed`);
+            // Still mark as Ready since Helm succeeded, but log warning
+            await atomicUpdateStores((stores) => {
+                const storeIndex = stores.findIndex(s => s.id === newStore.id);
+                if (storeIndex !== -1) {
+                    stores[storeIndex].status = 'Ready';
+                }
+                return stores;
+            });
+        }
     } catch (error) {
         console.error(`Error provisioning store ${name}:`, error);
         // Update status to Failed (atomic operation)
@@ -500,6 +605,185 @@ app.delete('/api/stores/:id', async (req, res) => {
 // Provisioning timeout: 15 minutes (900 seconds)
 const PROVISIONING_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
+// Check if store is truly ready by verifying Kubernetes resources
+async function checkStoreReady(storeName, namespace, type) {
+    try {
+        // 1. Check all pods are running and ready (excluding job pods that are Completed)
+        // Use JSON to properly check pod status including init containers
+        const podsOutput = await execPromise(
+            `kubectl get pods -n ${namespace} -o json 2>/dev/null || echo "{}"`
+        );
+        
+        try {
+            const podsData = JSON.parse(podsOutput);
+            if (podsData.items && podsData.items.length > 0) {
+                for (const pod of podsData.items) {
+                    const podName = pod.metadata.name;
+                    const phase = pod.status.phase;
+                    
+                    // Skip completed job pods
+                    if (phase === 'Succeeded') {
+                        continue;
+                    }
+                    
+                    // Check if pod is still initializing (init containers running)
+                    if (pod.status.initContainerStatuses && pod.status.initContainerStatuses.length > 0) {
+                        for (const initContainer of pod.status.initContainerStatuses) {
+                            if (!initContainer.ready) {
+                                console.log(`Store ${storeName}: Pod ${podName} init container ${initContainer.name} not ready`);
+                                return false;
+                            }
+                        }
+                    }
+                    
+                    // Check if pod phase is not Running
+                    if (phase !== 'Running') {
+                        console.log(`Store ${storeName}: Pod ${podName} is not running (phase: ${phase})`);
+                        return false;
+                    }
+                    
+                    // Check if all containers in pod are ready
+                    if (pod.status.containerStatuses && pod.status.containerStatuses.length > 0) {
+                        for (const container of pod.status.containerStatuses) {
+                            if (!container.ready) {
+                                console.log(`Store ${storeName}: Pod ${podName} container ${container.name} not ready`);
+                                return false;
+                            }
+                        }
+                    } else {
+                        // No container statuses yet - pod might still be initializing
+                        console.log(`Store ${storeName}: Pod ${podName} has no container statuses yet`);
+                        return false;
+                    }
+                }
+            }
+        } catch (parseError) {
+            console.error(`Error parsing pods JSON for ${storeName}:`, parseError);
+            // Fallback to simple check
+            const podsSimple = await execPromise(
+                `kubectl get pods -n ${namespace} --field-selector=status.phase!=Succeeded --no-headers 2>/dev/null || echo ""`
+            );
+            if (podsSimple.trim()) {
+                // Check for pods not in Running phase or not ready
+                const notReady = podsSimple.trim().split('\n').filter(line => {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length < 3) return true;
+                    const phase = parts[2];
+                    const ready = parts[1];
+                    return phase !== 'Running' || !ready.match(/^\d+\/\d+$/);
+                });
+                if (notReady.length > 0) {
+                    console.log(`Store ${storeName}: Found ${notReady.length} pods not ready`);
+                    return false;
+                }
+            }
+        }
+
+        // 3. Check all jobs have completed successfully
+        // Use JSON output to check job completion status reliably
+        const jobsOutput = await execPromise(
+            `kubectl get jobs -n ${namespace} -o json 2>/dev/null || echo "{}"`
+        );
+        
+        try {
+            const jobsData = JSON.parse(jobsOutput);
+            if (jobsData.items && jobsData.items.length > 0) {
+                for (const job of jobsData.items) {
+                    const jobName = job.metadata.name;
+                    const succeeded = job.status.succeeded || 0;
+                    const completions = job.spec.completions || 1;
+                    const active = job.status.active || 0;
+                    const failed = job.status.failed || 0;
+                    
+                    // Check if job has failed
+                    if (failed > 0) {
+                        console.log(`Store ${storeName}: Job ${jobName} has failed`);
+                        return false;
+                    }
+                    
+                    // Check if job is still active (has running pods)
+                    if (active > 0) {
+                        console.log(`Store ${storeName}: Job ${jobName} is still active (${active} active pods)`);
+                        return false;
+                    }
+                    
+                    // Check if job has completed successfully
+                    // succeeded should equal completions for job to be complete
+                    if (succeeded < completions) {
+                        console.log(`Store ${storeName}: Job ${jobName} not complete (${succeeded}/${completions} succeeded)`);
+                        return false;
+                    }
+                }
+            }
+        } catch (parseError) {
+            console.error(`Error parsing jobs JSON for ${storeName}:`, parseError);
+            // Fallback to simple check
+            const jobsSimple = await execPromise(
+                `kubectl get jobs -n ${namespace} --no-headers 2>/dev/null || echo ""`
+            );
+            if (jobsSimple.trim()) {
+                // If we can't parse, be conservative and check if any job shows incomplete
+                const incompleteJobs = jobsSimple.trim().split('\n').filter(line => {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length < 2) return false;
+                    const completions = parts[1];
+                    const match = completions.match(/^(\d+)\/(\d+)$/);
+                    if (match) {
+                        return parseInt(match[1]) < parseInt(match[2]);
+                    }
+                    return true; // Unknown format, assume incomplete
+                });
+                if (incompleteJobs.length > 0) {
+                    console.log(`Store ${storeName}: Found ${incompleteJobs.length} incomplete jobs`);
+                    return false;
+                }
+            }
+        }
+
+        // 5. Type-specific checks
+        if (type === 'woocommerce') {
+            // Check WordPress pod is ready (try multiple label selectors)
+            let wpPod = await execPromise(
+                `kubectl get pods -n ${namespace} -l app=wordpress --no-headers 2>/dev/null | grep Running | grep "1/1" || echo ""`
+            );
+            // If not found, try app.kubernetes.io/name=wordpress
+            if (!wpPod.trim()) {
+                wpPod = await execPromise(
+                    `kubectl get pods -n ${namespace} -l app.kubernetes.io/name=wordpress --no-headers 2>/dev/null | grep Running | grep "1/1" || echo ""`
+                );
+            }
+            // If still not found, check for any pod with "wordpress" in the name
+            if (!wpPod.trim()) {
+                wpPod = await execPromise(
+                    `kubectl get pods -n ${namespace} --no-headers 2>/dev/null | grep wordpress | grep Running | grep "1/1" || echo ""`
+                );
+            }
+            if (!wpPod.trim()) {
+                console.log(`Store ${storeName}: WordPress pod not ready`);
+                return false;
+            }
+        } else if (type === 'medusa') {
+            // Check backend and storefront pods are ready
+            const backendPod = await execPromise(
+                `kubectl get pods -n ${namespace} -l app=medusa-backend --no-headers 2>/dev/null | grep Running | grep "1/1" || echo ""`
+            );
+            const storefrontPod = await execPromise(
+                `kubectl get pods -n ${namespace} -l app=medusa-storefront --no-headers 2>/dev/null | grep Running | grep "1/1" || echo ""`
+            );
+            if (!backendPod.trim() || !storefrontPod.trim()) {
+                console.log(`Store ${storeName}: Medusa pods not ready (backend: ${!!backendPod.trim()}, storefront: ${!!storefrontPod.trim()})`);
+                return false;
+            }
+        }
+
+        console.log(`Store ${storeName}: All checks passed - store is ready`);
+        return true;
+    } catch (error) {
+        console.error(`Error checking store readiness for ${storeName}:`, error);
+        return false;
+    }
+}
+
 const execPromise = (command, timeoutMs = 300000) => { // Default 5 minutes timeout
     return new Promise((resolve, reject) => {
         const childProcess = exec(command, (error, stdout, stderr) => {
@@ -524,9 +808,41 @@ const execPromise = (command, timeoutMs = 300000) => { // Default 5 minutes time
     });
 };
 
+// Periodic status refresh for provisioning stores (every 5 seconds)
+setInterval(async () => {
+    try {
+        const stores = await readStores();
+        // Only refresh stores that are Provisioning or Ready (skip Failed/Deleting)
+        const provisioningStores = stores.filter(s => s.status === 'Provisioning' || s.status === 'Ready');
+        
+        if (provisioningStores.length > 0) {
+            const refreshPromises = provisioningStores.map(store => refreshStoreStatus(store));
+            const refreshedStores = await Promise.all(refreshPromises);
+            
+            // Only update if status actually changed
+            let hasChanges = false;
+            const updatedStores = stores.map(store => {
+                const refreshed = refreshedStores.find(s => s.id === store.id);
+                if (refreshed && refreshed.status !== store.status) {
+                    hasChanges = true;
+                    return refreshed;
+                }
+                return store;
+            });
+            
+            if (hasChanges) {
+                await atomicUpdateStores(() => updatedStores);
+            }
+        }
+    } catch (error) {
+        console.error('Error in periodic status refresh:', error);
+    }
+}, 5000); // Check every 5 seconds
+
 app.listen(port, () => {
     console.log(`Backend listening at http://localhost:${port}`);
     console.log(`Environment configuration: DEFAULT_ENVIRONMENT=${DEFAULT_ENVIRONMENT} (from .env)`);
     console.log(`Production domain: ${PRODUCTION_DOMAIN} (from .env)`);
     console.log(`Stores will be provisioned to: ${DEFAULT_ENVIRONMENT === 'local' ? 'Local (Kind/k3d/Minikube)' : `Production (k3s VPS) - default domain: ${PRODUCTION_DOMAIN}`}`);
+    console.log('Periodic status refresh enabled (every 5 seconds)');
 });

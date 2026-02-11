@@ -56,11 +56,15 @@ spec:
         - name: storefront
           image: {{ .Values.storefront.image }}
           imagePullPolicy: {{ .Values.storefront.imagePullPolicy | default "IfNotPresent" }}
-          command: ["npm", "run", "dev", "--", "-p", "{{ .Values.storefront.port }}"]
+          command: ["npm", "run", "dev", "--", "-p", "{{ .Values.storefront.port }}", "-H", "0.0.0.0"]
 
           env:
             - name: NODE_ENV
               value: {{ .Values.storefront.nodeEnv | default "production" | quote }}
+            
+            # Configure Next.js dev mode to work behind proxy/ingress
+            - name: HOSTNAME
+              value: "0.0.0.0"
 
             - name: MEDUSA_BACKEND_URL
               value: http://medusa-backend:{{ .Values.backend.port }}

@@ -20,44 +20,44 @@ postgres:
   storageClass: "local-path"  # k3s default
   resources:
     requests:
-      cpu: 500m
-      memory: 1Gi
+      cpu: 200m  # Reduced for limited resources
+      memory: 512Mi  # Reduced for limited resources
     limits:
-      cpu: 2000m
-      memory: 4Gi
+      cpu: 1000m  # Reduced for limited resources
+      memory: 2Gi  # Reduced for limited resources
 
 # Backend configuration for production
 backend:
-  image: adc47/medusa-backend:latest  # Replace with your registry
+  image: adc47/medusa-backend:local  # Replace with your registry
   imagePullPolicy: Always
   port: 9000
-  replicas: 2
+  replicas: 1  # Reduced for limited resources
   nodeEnv: production
   resources:
     requests:
-      memory: "4Gi"
-      cpu: "1000m"
+      memory: "2Gi"  # Reduced for limited resources
+      cpu: "500m"     # Reduced for limited resources
     limits:
-      memory: "8Gi"
-      cpu: "2000m"
+      memory: "4Gi"   # Reduced for limited resources
+      cpu: "1000m"    # Reduced for limited resources
 
 # Storefront configuration for production
 storefront:
-  image: adc47/medusa-storefront:latest  # Replace with your registry
+  image: adc47/medusa-storefront:local  # Replace with your registry
   imagePullPolicy: Always
   port: 8000
-  replicas: 2
-  nodeEnv: production
+  replicas: 1  # Reduced for limited resources
+  nodeEnv: development  # Must be 'development' when using 'npm run dev' (image not pre-built)
   disableStripe: "false"  # Enable Stripe in production
   disableSSG: "false"  # Enable SSG in production
   ignoreApiErrors: "false"  # Fail on API errors in production
   resources:
     requests:
-      memory: "2Gi"
-      cpu: "1000m"
+      memory: "1Gi"
+      cpu: "1000m"  # Reduced but still enough for dev mode compilation
     limits:
-      memory: "4Gi"
-      cpu: "2000m"
+      memory: "2Gi"
+      cpu: "2000m"  # Reduced but still enough for dev mode compilation
 
 # Admin user for production
 admin:
@@ -93,15 +93,16 @@ ingress:
         - ""  # Will be overridden by backend via --set ingress.tls[0].hosts[0]
 
 # Autoscaling enabled for production
+# Limited to 1-2 replicas due to resource constraints (6 cores, 32GB RAM)
 autoscaling:
   enabled: true
   backend:
-    minReplicas: 2
-    maxReplicas: 5
+    minReplicas: 1  # Match deployment replicas
+    maxReplicas: 2  # Limited by resource quota (2500m CPU requests)
     targetCPUUtilizationPercentage: 70
   storefront:
-    minReplicas: 2
-    maxReplicas: 5
+    minReplicas: 1  # Match deployment replicas
+    maxReplicas: 2  # Limited by resource quota (2500m CPU requests)
     targetCPUUtilizationPercentage: 70
 
 # Pod disruption budget
@@ -110,13 +111,15 @@ podDisruptionBudget:
   minAvailable: 1
 
 # Resource quota for production (enabled by default for multi-tenant isolation)
+# Optimized for limited resources: 6 cores, 32GB RAM total
+# Allocation: Storefront: 1000m, Backend: 500m, Postgres: 200m, Migration: 200m = 1900m per store
 resourceQuota:
   enabled: true
   hard:
-    requests.cpu: "2000m"
-    requests.memory: "4Gi"
-    limits.cpu: "4000m"
-    limits.memory: "8Gi"
+    requests.cpu: "2500m"      # Storefront: 1000m + Backend: 500m + Postgres: 200m + Migration: 200m + Buffer: 600m
+    requests.memory: "6Gi"     # Storefront: 1Gi + Backend: 2Gi + Postgres: 512Mi + Migration: 512Mi + Buffer: 2Gi
+    limits.cpu: "5000m"        # Storefront: 2000m + Backend: 1000m + Postgres: 1000m + Migration: 1000m + Buffer: 0m
+    limits.memory: "12Gi"      # Storefront: 2Gi + Backend: 4Gi + Postgres: 2Gi + Migration: 1Gi + Buffer: 3Gi
     pods: "10"
     services: "6"
     persistentvolumeclaims: "3"
