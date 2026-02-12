@@ -18,21 +18,34 @@ spec:
           imagePullPolicy: {{ .Values.backend.imagePullPolicy | default "IfNotPresent" }}
           command: ["npm", "run", "start"]
           env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store-medusa.postgresSecretName" . }}
+                  key: user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store-medusa.postgresSecretName" . }}
+                  key: password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store-medusa.postgresSecretName" . }}
+                  key: database
             - name: DATABASE_URL
               value: postgres://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.database }}?sslmode=disable
 
             - name: JWT_SECRET
-              {{- if and .Values.security .Values.security.jwtSecret }}
-              value: {{ .Values.security.jwtSecret | quote }}
-              {{- else }}
-              value: "supersecret"  # WARNING: Default for local dev only - MUST override in production
-              {{- end }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store-medusa.medusaSecretName" . }}
+                  key: jwtSecret
             - name: COOKIE_SECRET
-              {{- if and .Values.security .Values.security.cookieSecret }}
-              value: {{ .Values.security.cookieSecret | quote }}
-              {{- else }}
-              value: "supersecret"  # WARNING: Default for local dev only - MUST override in production
-              {{- end }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store-medusa.medusaSecretName" . }}
+                  key: cookieSecret
             - name: NODE_ENV
               value: {{ .Values.backend.nodeEnv | default "production" | quote }}
             - name: STORE_CORS

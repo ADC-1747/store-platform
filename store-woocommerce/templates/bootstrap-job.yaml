@@ -83,7 +83,11 @@ spec:
                   --skip-content
               fi
 
-              echo "📝 Creating wp-config.php with SSL disabled..."
+              echo "📝 Creating wp-config.php..."
+              {{- $isHttps := false }}
+              {{- if .Values.ingress.tls }}
+              {{- $isHttps = true }}
+              {{- end }}
               if [ ! -f wp-config.php ]; then
                 cat > wp-config.php <<'WPCONFIG'
               <?php
@@ -110,7 +114,16 @@ spec:
               $table_prefix = 'wp_';
 
               define('WP_DEBUG', false);
+              {{- if $isHttps }}
+              // HTTPS configuration for production (behind Traefik proxy)
+              // Trust X-Forwarded-Proto header from Traefik to detect HTTPS
+              if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+                  $_SERVER['HTTPS'] = 'on';
+              }
+              define('FORCE_SSL_ADMIN', true);
+              {{- else }}
               define('FORCE_SSL_ADMIN', false);
+              {{- end }}
 
               if ( !defined('ABSPATH') )
                   define('ABSPATH', dirname(__FILE__) . '/');
@@ -170,8 +183,8 @@ spec:
                 wp core install \
                   --url="{{ $fullUrl }}" \
                   --title="Woo Store" \
-                  --admin_user=admin \
-                  --admin_password=admin123 \
+                  --admin_user={{ .Values.admin.username | default "admin" | quote }} \
+                  --admin_password={{ .Values.admin.password | default "admin123" | quote }} \
                   --admin_email={{ include "store-woocommerce.adminEmail" . | quote }} \
                   --skip-email \
                   --allow-root
@@ -231,5 +244,5 @@ spec:
               echo "🎉 Your WooCommerce store is ready!"
               echo "   URL: {{ $fullUrl }}"
               echo "   Admin: {{ $fullUrl }}/wp-admin"
-              echo "   Username: admin"
-              echo "   Password: admin123"
+              echo "   Username: {{ .Values.admin.username | default "admin" }}"
+              echo "   Password: {{ .Values.admin.password | default "admin123" }}"

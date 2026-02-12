@@ -75,8 +75,11 @@ Example: "store.example.com" -> "example.com"
 {{- /* Fallback: extract from store.domain */}}
 {{- $domainParts := splitList "." .Values.store.domain }}
 {{- $domainLen := len $domainParts }}
-{{- if gt $domainLen 1 }}
-{{- join "." (last 2 $domainParts) }}
+{{- if ge $domainLen 2 }}
+{{- /* Get last 2 parts: manually construct from last 2 indices */}}
+{{- $secondLast := index $domainParts (sub $domainLen 2) }}
+{{- $last := index $domainParts (sub $domainLen 1) }}
+{{- printf "%s.%s" $secondLast $last }}
 {{- else }}
 {{- "example.com" }}
 {{- end }}
@@ -85,8 +88,11 @@ Example: "store.example.com" -> "example.com"
 {{- /* Extract domain from store.domain */}}
 {{- $domainParts := splitList "." .Values.store.domain }}
 {{- $domainLen := len $domainParts }}
-{{- if gt $domainLen 1 }}
-{{- join "." (last 2 $domainParts) }}
+{{- if ge $domainLen 2 }}
+{{- /* Get last 2 parts: manually construct from last 2 indices */}}
+{{- $secondLast := index $domainParts (sub $domainLen 2) }}
+{{- $last := index $domainParts (sub $domainLen 1) }}
+{{- printf "%s.%s" $secondLast $last }}
 {{- else }}
 {{- "example.com" }}
 {{- end }}
@@ -150,3 +156,25 @@ Get backend API host from ingress hosts or construct from store.domain
 {{- end }}
 {{- $host }}
 {{- end }}
+
+{{/*
+Get the name of the secret to use for PostgreSQL
+*/}}
+{{- define "store-medusa.postgresSecretName" -}}
+{{- if .Values.postgres.existingSecret -}}
+{{- .Values.postgres.existingSecret -}}
+{{- else -}}
+{{- include "store-medusa.fullname" . -}}-postgres-secret
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the name of the secret to use for Medusa security (JWT_SECRET, COOKIE_SECRET)
+*/}}
+{{- define "store-medusa.medusaSecretName" -}}
+{{- if .Values.security.existingSecret -}}
+{{- .Values.security.existingSecret -}}
+{{- else -}}
+{{- include "store-medusa.fullname" . -}}-medusa-secret
+{{- end -}}
+{{- end -}}

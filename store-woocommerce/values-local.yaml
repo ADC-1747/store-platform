@@ -53,6 +53,8 @@ networkPolicy:
 
 # Admin user for local development
 admin:
+  username: admin
+  password: admin123  # Local only - override for production
   # Email will be auto-generated from ingress host/domain if not provided
   # Override via --set admin.email=<custom-email> if needed
   email: ""  # Auto-generated from domain, or override via --set

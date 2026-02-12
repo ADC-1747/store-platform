@@ -164,3 +164,9 @@ affinity: {}
 
 networkPolicy:
   enabled: false
+
+admin:
+  # WordPress admin user configuration
+  username: admin
+  password: admin123  # Change this in production! Override via --set admin.password=<secure-password>
+  email: ""  # Auto-generated from domain, or override via --set admin.email=<email>

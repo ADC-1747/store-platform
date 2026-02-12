@@ -91,9 +91,11 @@ Extract domain from ingress host or store.domain for admin email
 {{- end }}
 {{- $domainParts := splitList "." $host }}
 {{- $domainLen := len $domainParts }}
-{{- if gt $domainLen 1 }}
-{{- $lastTwo := last $domainParts }}
-{{- join "." $lastTwo }}
+{{- if ge $domainLen 2 }}
+{{- /* Get last 2 parts: manually construct from last 2 indices */}}
+{{- $secondLast := index $domainParts (sub $domainLen 2) }}
+{{- $last := index $domainParts (sub $domainLen 1) }}
+{{- printf "%s.%s" $secondLast $last }}
 {{- else }}
 {{- "example.com" }}
 {{- end }}

@@ -8,6 +8,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { exec } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
@@ -71,6 +72,11 @@ class FileMutex {
 
 const fileMutex = new FileMutex();
 
+// Helper function to generate secure random secrets
+function generateSecureSecret(length = 32) {
+    return crypto.randomBytes(length).toString('hex');
+}
+
 // Helper to read stores (with locking)
 const readStores = async () => {
     await fileMutex.acquire();
@@ -104,6 +110,11 @@ const atomicUpdateStores = async (updateFn) => {
             : [];
         const updated = updateFn(stores);
         fs.writeFileSync(STORES_FILE, JSON.stringify(updated, null, 2));
+        // Verify write succeeded
+        const verify = JSON.parse(fs.readFileSync(STORES_FILE));
+        if (JSON.stringify(verify) !== JSON.stringify(updated)) {
+            console.error('⚠️ File write verification failed - data mismatch!');
+        }
         return updated;
     } catch (error) {
         // Re-throw errors from updateFn so they can be caught by the caller
@@ -186,7 +197,13 @@ async function refreshStoreStatus(store) {
             if (store.status !== 'Ready') {
                 // Store became ready - update status
                 console.log(`Refreshing store ${store.name}: Setting status to Ready`);
+                // IMPORTANT: Preserve secrets when updating status
+                const existingSecrets = store.secrets;
                 const updatedStore = { ...store, status: 'Ready', error: null };
+                // Restore secrets if they existed
+                if (existingSecrets) {
+                    updatedStore.secrets = existingSecrets;
+                }
                 
                 // Add event if status changed from Provisioning or Failed
                 if (store.status === 'Provisioning' || store.status === 'Failed') {
@@ -209,25 +226,32 @@ async function refreshStoreStatus(store) {
                 }
                 return updatedStore;
             }
-            // Already Ready - return as-is
+            // Already Ready - return as-is (preserve secrets)
             return store;
         } else {
             // Store is not ready
             if (store.status === 'Ready') {
                 // Store was marked Ready but is not actually ready - revert to Provisioning
                 console.log(`Refreshing store ${store.name}: Reverting status from Ready to Provisioning (not actually ready)`);
+                // IMPORTANT: Preserve secrets when reverting status
+                const existingSecrets = store.secrets;
+                const revertedStore = { ...store, status: 'Provisioning', error: null };
+                // Restore secrets if they existed
+                if (existingSecrets) {
+                    revertedStore.secrets = existingSecrets;
+                }
                 // Fire and forget - don't await to avoid blocking refresh
                 addStoreEvent(store.id, `Store readiness check failed - reverting to Provisioning`, 'warning').catch(err => 
                     console.error(`Error adding event for store ${store.name}:`, err)
                 );
-                return { ...store, status: 'Provisioning', error: null };
+                return revertedStore;
             } else if (store.status === 'Failed') {
                 // Store is Failed but namespace exists and pods are not ready
                 // This could be a recovery attempt - check if it's been a while since failure
                 // For now, keep Failed status if namespace exists but pods aren't ready
                 return store;
             }
-            // Still provisioning - keep status as is
+            // Still provisioning - keep status as is (preserve secrets)
             return store;
         }
     } catch (error) {
@@ -254,7 +278,16 @@ app.get('/api/stores', async (req, res) => {
             await atomicUpdateStores((currentStores) => {
                 return currentStores.map(store => {
                     const refreshed = refreshedStores.find(s => s.id === store.id);
-                    return refreshed || store;
+                    if (refreshed) {
+                        // IMPORTANT: Preserve secrets from current store if refreshed store doesn't have them
+                        // This prevents secrets from being lost during status refresh (race condition fix)
+                        if (store.secrets && !refreshed.secrets) {
+                            refreshed.secrets = store.secrets;
+                            console.log(`✅ Preserved secrets during status refresh for ${store.name}`);
+                        }
+                        return refreshed;
+                    }
+                    return store;
                 });
             });
             stores = await readStores();
@@ -454,17 +487,23 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                     helmCommand += ` --set storefront.imagePullPolicy=IfNotPresent`;
                     // Set default postgres password for local testing
                     helmCommand += ` --set postgres.password=medusa123`;
-                    // Set default admin password for local testing
+                    // Set default admin email and password for local testing
+                    // Use provided email if available, otherwise use admin@nip.io
+                    if (adminEmail && adminEmail.trim()) {
+                        helmCommand += ` --set admin.email=${adminEmail.trim()}`;
+                    } else {
+                        helmCommand += ` --set admin.email=admin@nip.io`;
+                    }
                     helmCommand += ` --set admin.password=supersecret`;
                 }
+                // Set default admin password for WooCommerce local testing (values-prod.yaml has empty password)
+                if (type === 'woocommerce') {
+                    helmCommand += ` --set admin.password=admin123`;
+                }
                 helmCommand += ` --set ingress.tls=null`; // Disable TLS for local testing
-                // Admin email: use provided email or auto-generate from domain
-                if (adminEmail && adminEmail.trim()) {
-                    if (type === 'woocommerce') {
-                        helmCommand += ` --set admin.email=${adminEmail.trim()}`;
-                    } else if (type === 'medusa') {
-                        helmCommand += ` --set admin.email=${adminEmail.trim()}`;
-                    }
+                // Admin email for WooCommerce: use provided email or auto-generate from domain
+                if (type === 'woocommerce' && adminEmail && adminEmail.trim()) {
+                    helmCommand += ` --set admin.email=${adminEmail.trim()}`;
                 }
                 console.log('Using values-prod.yaml for local testing (nip.io, no TLS)');
             } else {
@@ -480,22 +519,138 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                     helmCommand += ` --set store.domain=${prodHost}`;
                 }
                 
-                // Check if domain is nip.io (local testing) - disable TLS for nip.io
+                // Check if domain is nip.io (for TLS purposes - nip.io can't have valid certificates)
                 const isNipIo = effectiveDomain && effectiveDomain.includes('nip.io');
                 
-                if (isNipIo) {
-                    // Disable TLS and annotations for nip.io domains (no valid certificates)
-                    helmCommand += ` --set ingress.tls=null`;
-                    // Clear annotations that are set in values-prod.yaml for nip.io domains
-                    if (type === 'medusa') {
-                        helmCommand += ` --set ingress.annotations=null`;
-                        // Set default postgres password for local testing
-                        helmCommand += ` --set postgres.password=medusa123`;
-                        // Set default admin password for local testing
-                        helmCommand += ` --set admin.password=supersecret`;
-                    } else if (type === 'woocommerce') {
-                        helmCommand += ` --set ingress.annotations=null`;
+                // Generate secure secrets for production environment (regardless of domain)
+                // If environment is 'prod', use secure secrets even for nip.io domains
+                if (effectiveEnvironment === 'prod') {
+                    // Generate secure secrets for production
+                    const mariadbPassword = generateSecureSecret(24);
+                    const mariadbRootPassword = generateSecureSecret(24);
+                    const wpAdminPassword = generateSecureSecret(24);
+                    const postgresPassword = generateSecureSecret(24);
+                    const medusaAdminPassword = generateSecureSecret(24);
+                    const jwtSecret = generateSecureSecret(32);
+                    const cookieSecret = generateSecureSecret(32);
+                    
+                    // Store generated secrets in store object for later retrieval
+                    // Note: In production, consider storing these in a secure secret store
+                    try {
+                        // Capture store info for logging
+                        const storeIdToFind = newStore.id;
+                        const storeNameToFind = name;
+                        console.log(`Attempting to store secrets for store: ${storeNameToFind} (ID: ${storeIdToFind})`);
+                        
+                        await atomicUpdateStores((stores) => {
+                            // Try to find store by ID first, then by name as fallback
+                            let storeIndex = stores.findIndex(s => s.id === storeIdToFind);
+                            if (storeIndex === -1) {
+                                // Fallback: find by name
+                                storeIndex = stores.findIndex(s => s.name === storeNameToFind);
+                                if (storeIndex === -1) {
+                                    console.error(`❌ Store ${storeIdToFind} (${storeNameToFind}) not found when storing secrets. Available stores:`, stores.map(s => `${s.id}:${s.name}`));
+                                    return stores; // Return unchanged if store not found
+                                }
+                                console.log(`⚠️ Found store by name instead of ID: ${storeNameToFind}`);
+                            } else {
+                                console.log(`✅ Found store by ID: ${storeNameToFind} (${storeIdToFind})`);
+                            }
+                            if (type === 'woocommerce') {
+                                stores[storeIndex].secrets = {
+                                    mariadbPassword,
+                                    mariadbRootPassword,
+                                    adminPassword: wpAdminPassword
+                                };
+                                console.log(`✅ Stored secrets for WooCommerce store ${storeNameToFind} (ID: ${storeIdToFind})`);
+                            } else if (type === 'medusa') {
+                                // Generate admin email from domain (must match Helm template logic)
+                                // The Helm template extracts LAST 2 parts of store.domain
+                                // For "store.example.com" -> extracts "example.com" -> "admin@example.com"
+                                // For "store.127.0.0.1.nip.io" -> extracts "nip.io" -> "admin@nip.io"
+                                let adminEmailValue = adminEmail && adminEmail.trim() ? adminEmail.trim() : null;
+                                if (!adminEmailValue) {
+                                    // Extract domain from prodHost - use LAST 2 parts (matches Helm template)
+                                    const domainParts = prodHost.split('.');
+                                    if (domainParts.length >= 2) {
+                                        // Extract last 2 parts (same as Helm template logic)
+                                        adminEmailValue = `admin@${domainParts.slice(-2).join('.')}`;
+                                    } else {
+                                        adminEmailValue = `admin@${prodHost}`;
+                                    }
+                                }
+                                stores[storeIndex].secrets = {
+                                    postgresPassword,
+                                    adminPassword: medusaAdminPassword,
+                                    adminEmail: adminEmailValue,
+                                    jwtSecret,
+                                    cookieSecret
+                                };
+                                console.log(`✅ Stored secrets for Medusa store ${storeNameToFind} (ID: ${storeIdToFind}), email: ${adminEmailValue}`);
+                                console.log(`🔍 Verifying secrets in stores array:`, stores[storeIndex].secrets ? 'Present' : 'Missing');
+                            }
+                            // Verify the secrets were actually set before returning
+                            if (stores[storeIndex] && stores[storeIndex].secrets) {
+                                console.log(`✅ Secrets verified in stores array before write`);
+                            } else {
+                                console.error(`❌ Secrets NOT found in stores array after assignment!`);
+                            }
+                            return stores;
+                        });
+                        // Verify secrets were persisted after atomic update
+                        const verifyStores = await readStores();
+                        const verifyStore = verifyStores.find(s => s.id === storeIdToFind || s.name === storeNameToFind);
+                        if (verifyStore && verifyStore.secrets) {
+                            console.log(`✅ Secrets verified in file after write`);
+                        } else {
+                            console.error(`❌ Secrets NOT found in file after write! Store:`, verifyStore ? `${verifyStore.name} (${verifyStore.id})` : 'not found');
+                        }
+                    } catch (error) {
+                        console.error(`❌ Failed to store secrets for store ${newStore.name}:`, error);
+                        console.error(`Error details:`, error.stack);
+                        // Don't fail provisioning if secret storage fails
                     }
+                    
+                    // Handle TLS based on domain type (nip.io can't have valid certificates)
+                    if (isNipIo) {
+                        // nip.io domain - disable TLS (no valid certificates possible)
+                        helmCommand += ` --set ingress.tls=null`;
+                        // Clear annotations that are set in values-prod.yaml for nip.io domains
+                        if (type === 'medusa') {
+                            helmCommand += ` --set ingress.annotations=null`;
+                        } else if (type === 'woocommerce') {
+                            helmCommand += ` --set ingress.annotations=null`;
+                        }
+                        console.log(`Using production environment with nip.io domain (secure secrets, TLS disabled): ${prodHost}`);
+                    } else {
+                        // Real production domain - enable TLS with cert-manager
+                        if (type === 'woocommerce') {
+                            // WooCommerce: Set annotations explicitly
+                            helmCommand += ` --set ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt-prod`;
+                            helmCommand += ` --set ingress.annotations.traefik\.ingress\.kubernetes\.io/router\.tls=true`;
+                            helmCommand += ` --set ingress.tls[0].secretName=${name}-tls`;
+                            helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
+                        } else if (type === 'medusa') {
+                            // Medusa: annotations already in values-prod.yaml, just set TLS hosts
+                            helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
+                        }
+                        console.log(`Using production domain with TLS (cert-manager): ${prodHost}`);
+                    }
+                    
+                    // Set production secrets (properly quoted for shell safety)
+                    if (type === 'woocommerce') {
+                        helmCommand += ` --set mariadb.auth.password="${mariadbPassword}"`;
+                        helmCommand += ` --set mariadb.auth.rootPassword="${mariadbRootPassword}"`;
+                        helmCommand += ` --set admin.password="${wpAdminPassword}"`;
+                    } else if (type === 'medusa') {
+                        helmCommand += ` --set postgres.password="${postgresPassword}"`;
+                        helmCommand += ` --set admin.password="${medusaAdminPassword}"`;
+                        helmCommand += ` --set security.jwtSecret="${jwtSecret}"`;
+                        helmCommand += ` --set security.cookieSecret="${cookieSecret}"`;
+                        // Override store domain (used for auto-generating hosts, CORS, admin email)
+                        helmCommand += ` --set store.domain=${prodHost}`;
+                    }
+                    
                     // Admin email: use provided email or auto-generate from domain
                     if (adminEmail && adminEmail.trim()) {
                         if (type === 'woocommerce') {
@@ -504,34 +659,37 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
                             helmCommand += ` --set admin.email=${adminEmail.trim()}`;
                         }
                     }
-                    console.log(`Using production config with nip.io domain (TLS and annotations disabled): ${prodHost}`);
+                    
+                    console.log(`Generated secure secrets for ${type} store`);
                 } else {
-                    // Real production domain - enable TLS with cert-manager
-                    // Note: For Medusa, annotations are already set in values-prod.yaml, so we don't override them
-                    // Only set TLS hosts and domain
-                    if (type === 'woocommerce') {
-                        // WooCommerce: Set annotations explicitly
-                        helmCommand += ` --set ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt-prod`;
-                        helmCommand += ` --set ingress.annotations.traefik\.ingress\.kubernetes\.io/router\.tls=true`;
-                        helmCommand += ` --set ingress.tls[0].secretName=${name}-tls`;
-                        helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
-                        // Admin email: use provided email or auto-generate from domain
-                        if (adminEmail && adminEmail.trim()) {
-                            helmCommand += ` --set admin.email=${adminEmail.trim()}`;
+                    // Local environment - use default passwords and disable TLS for nip.io
+                    if (isNipIo) {
+                        // Disable TLS and annotations for nip.io domains (no valid certificates)
+                        helmCommand += ` --set ingress.tls=null`;
+                        // Clear annotations that are set in values-prod.yaml for nip.io domains
+                        if (type === 'medusa') {
+                            helmCommand += ` --set ingress.annotations=null`;
+                            // Set default postgres password for local testing
+                            helmCommand += ` --set postgres.password=medusa123`;
+                            // Set default admin email and password for local testing
+                            // Use provided email if available, otherwise use admin@nip.io
+                            if (adminEmail && adminEmail.trim()) {
+                                helmCommand += ` --set admin.email=${adminEmail.trim()}`;
+                            } else {
+                                helmCommand += ` --set admin.email=admin@nip.io`;
+                            }
+                            helmCommand += ` --set admin.password=supersecret`;
+                        } else if (type === 'woocommerce') {
+                            helmCommand += ` --set ingress.annotations=null`;
+                            // Set default admin password for local testing (values-prod.yaml has empty password)
+                            helmCommand += ` --set admin.password=admin123`;
+                            // Admin email for WooCommerce: use provided email if available
+                            if (adminEmail && adminEmail.trim()) {
+                                helmCommand += ` --set admin.email=${adminEmail.trim()}`;
+                            }
                         }
-                    } else if (type === 'medusa') {
-                        // Medusa: annotations already in values-prod.yaml, just set TLS hosts and domain
-                        // Don't override annotations to avoid YAML parse errors
-                        helmCommand += ` --set ingress.tls[0].hosts[0]=${prodHost}`;
-                        // Override store domain (used for auto-generating hosts, CORS, admin email)
-                        helmCommand += ` --set store.domain=${prodHost}`;
-                        // CORS will be auto-generated from store.domain in templates
-                        // Admin email: use provided email or auto-generate from domain
-                        if (adminEmail && adminEmail.trim()) {
-                            helmCommand += ` --set admin.email=${adminEmail.trim()}`;
-                        }
+                        console.log(`Using local environment with nip.io domain (default passwords, TLS disabled): ${prodHost}`);
                     }
-                    console.log(`Using production domain with TLS (cert-manager): ${prodHost}`);
                 }
             }
         }
@@ -572,12 +730,20 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
             const provisioningDuration = Math.round((Date.now() - new Date(newStore.provisioningStartedAt).getTime()) / 1000); // seconds
             
             // Update status to Ready (atomic operation)
+            // IMPORTANT: Preserve secrets if they exist
             await atomicUpdateStores((stores) => {
                 const storeIndex = stores.findIndex(s => s.id === newStore.id);
                 if (storeIndex !== -1) {
+                    // Preserve existing secrets if they were set
+                    const existingSecrets = stores[storeIndex].secrets;
                     stores[storeIndex].status = 'Ready';
                     stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
                     stores[storeIndex].provisioningDuration = provisioningDuration;
+                    // Restore secrets if they existed (they might have been set earlier)
+                    if (existingSecrets) {
+                        stores[storeIndex].secrets = existingSecrets;
+                        console.log(`✅ Preserved secrets when updating status to Ready for ${name}`);
+                    }
                 }
                 return stores;
             });
@@ -594,9 +760,15 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
             await atomicUpdateStores((stores) => {
                 const storeIndex = stores.findIndex(s => s.id === newStore.id);
                 if (storeIndex !== -1) {
+                    // Preserve existing secrets if they exist
+                    const existingSecrets = stores[storeIndex].secrets;
                     stores[storeIndex].status = 'Ready';
                     stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
                     stores[storeIndex].provisioningDuration = provisioningDuration;
+                    // Restore secrets if they existed
+                    if (existingSecrets) {
+                        stores[storeIndex].secrets = existingSecrets;
+                    }
                 }
                 return stores;
             });
@@ -619,11 +791,17 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
             await atomicUpdateStores((stores) => {
                 const storeIndex = stores.findIndex(s => s.id === newStore.id);
                 if (storeIndex !== -1) {
+                    // Preserve existing secrets if they exist
+                    const existingSecrets = stores[storeIndex].secrets;
                     stores[storeIndex].status = 'Failed';
                     stores[storeIndex].error = error.message;
                     if (provisioningDuration !== null) {
                         stores[storeIndex].provisioningCompletedAt = provisioningEndTime;
                         stores[storeIndex].provisioningDuration = provisioningDuration;
+                    }
+                    // Restore secrets if they existed
+                    if (existingSecrets) {
+                        stores[storeIndex].secrets = existingSecrets;
                     }
                 }
                 return stores;
@@ -657,18 +835,49 @@ app.delete('/api/stores/:id', async (req, res) => {
             const minutesSinceCreation = (now - createdAt) / (1000 * 60);
             
             if (minutesSinceCreation < 30) {
-                // Check if Helm release actually exists
+                // Check if Helm release actually exists and if bootstrap job failed
                 const namespace = `store-${store.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
                 try {
-                    const helmCheck = await execPromise(`helm list -n ${namespace} -q | grep -q "^${store.name}$" && echo "exists" || echo "notfound"`);
-                    if (helmCheck.trim() === 'notfound') {
-                        // Helm release doesn't exist, provisioning likely failed - allow deletion
-                        console.log(`Store ${store.name} is in Provisioning status but Helm release doesn't exist - allowing deletion`);
-                    } else {
-                        // Still provisioning and Helm release exists - prevent deletion
+                    // Check if namespace exists
+                    const nsCheck = await execPromise(`kubectl get namespace ${namespace} 2>/dev/null || echo "notfound"`);
+                    const namespaceExists = !nsCheck.trim().includes('notfound');
+                    
+                    // Check if Helm release exists
+                    const helmCheck = await execPromise(`helm list -n ${namespace} -q 2>/dev/null | grep -q "^${store.name}$" && echo "exists" || echo "notfound"`);
+                    const helmExists = helmCheck.trim() === 'exists';
+                    
+                    // Check if bootstrap job failed (for WooCommerce)
+                    let bootstrapFailed = false;
+                    if (store.type === 'woocommerce') {
+                        try {
+                            const bootstrapCheck = await execPromise(`kubectl get jobs -n ${namespace} -l app.kubernetes.io/component=bootstrap 2>/dev/null | grep -E "Failed|Error" || echo "ok"`);
+                            if (bootstrapCheck.trim() !== 'ok') {
+                                bootstrapFailed = true;
+                            }
+                            // Also check job status directly
+                            const jobStatus = await execPromise(`kubectl get jobs -n ${namespace} -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || echo ""`);
+                            if (jobStatus.trim() === 'True') {
+                                bootstrapFailed = true;
+                            }
+                        } catch (e) {
+                            // Ignore errors checking job status
+                        }
+                    }
+                    
+                    if (!namespaceExists || (!helmExists && minutesSinceCreation > 5)) {
+                        // Namespace doesn't exist or Helm release doesn't exist after 5 minutes - provisioning likely failed - allow deletion
+                        console.log(`Store ${store.name} is in Provisioning status but resources don't exist - allowing deletion`);
+                    } else if (bootstrapFailed) {
+                        // Bootstrap job failed - allow deletion
+                        console.log(`Store ${store.name} bootstrap job failed - allowing deletion`);
+                    } else if (helmExists && minutesSinceCreation < 10) {
+                        // Still provisioning and Helm release exists and it's been less than 10 minutes - prevent deletion
                         return res.status(409).json({ 
                             error: 'Cannot delete store while provisioning is in progress. Please wait for provisioning to complete or fail.' 
                         });
+                    } else if (minutesSinceCreation >= 10) {
+                        // Been provisioning for >10 minutes - likely stuck, allow deletion
+                        console.log(`Store ${store.name} has been provisioning for ${minutesSinceCreation.toFixed(1)} minutes - allowing deletion (likely stuck)`);
                     }
                 } catch (checkError) {
                     // If we can't check, allow deletion if it's been more than 10 minutes
@@ -968,8 +1177,15 @@ setInterval(async () => {
             let hasChanges = false;
             const updatedStores = stores.map(store => {
                 const refreshed = refreshedStores.find(s => s.id === store.id);
-                if (refreshed && refreshed.status !== store.status) {
-                    hasChanges = true;
+                if (refreshed) {
+                    // IMPORTANT: Preserve secrets from current store if refreshed store doesn't have them
+                    if (store.secrets && !refreshed.secrets) {
+                        refreshed.secrets = store.secrets;
+                        console.log(`✅ Preserved secrets during periodic status refresh for ${store.name}`);
+                    }
+                    if (refreshed.status !== store.status) {
+                        hasChanges = true;
+                    }
                     return refreshed;
                 }
                 return store;
@@ -1030,10 +1246,63 @@ app.get('/api/metrics', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`Backend listening at http://localhost:${port}`);
-    console.log(`Environment configuration: DEFAULT_ENVIRONMENT=${DEFAULT_ENVIRONMENT} (from .env)`);
-    console.log(`Production domain: ${PRODUCTION_DOMAIN} (from .env)`);
-    console.log(`Stores will be provisioned to: ${DEFAULT_ENVIRONMENT === 'local' ? 'Local (Kind/k3d/Minikube)' : `Production (k3s VPS) - default domain: ${PRODUCTION_DOMAIN}`}`);
-    console.log('Periodic status refresh enabled (every 5 seconds)');
+// Verify Kubernetes cluster connection at startup
+async function verifyKubernetesConnection() {
+    try {
+        // Check if kubectl can connect to cluster
+        const contextOutput = await execPromise('kubectl config current-context 2>/dev/null || echo "none"');
+        const context = contextOutput.trim();
+        
+        if (context === 'none' || !context) {
+            console.warn('⚠️  WARNING: No Kubernetes context found. kubectl may not be configured.');
+            console.warn('   Make sure you have run: ./scripts/k3d-setup.sh');
+            return;
+        }
+        
+        // Try to get cluster info
+        const nodesOutput = await execPromise('kubectl get nodes --no-headers 2>/dev/null || echo ""');
+        if (!nodesOutput.trim()) {
+            console.warn('⚠️  WARNING: Cannot connect to Kubernetes cluster.');
+            console.warn(`   Current context: ${context}`);
+            console.warn('   Make sure the cluster is running and kubectl is configured correctly.');
+            return;
+        }
+        
+        const nodeCount = nodesOutput.trim().split('\n').length;
+        console.log(`✅ Connected to Kubernetes cluster`);
+        console.log(`   Context: ${context}`);
+        console.log(`   Nodes: ${nodeCount}`);
+        
+        // Warn if context doesn't match expected k3d cluster name
+        if (DEFAULT_ENVIRONMENT === 'local' && !context.includes('k3d') && !context.includes('kind') && !context.includes('minikube')) {
+            console.warn('⚠️  WARNING: Current kubectl context does not appear to be a local cluster.');
+            console.warn(`   Context: ${context}`);
+            console.warn('   Expected: k3d-urumi-prod-test (or similar local cluster)');
+            console.warn('   If you have multiple clusters, ensure kubectl is pointing to the correct one.');
+        }
+    } catch (error) {
+        console.warn('⚠️  WARNING: Could not verify Kubernetes connection:', error.message);
+        console.warn('   Backend will start but may fail when creating stores.');
+    }
+}
+
+// Verify connection before starting server
+verifyKubernetesConnection().then(() => {
+    app.listen(port, () => {
+        console.log(`Backend listening at http://localhost:${port}`);
+        console.log(`Environment configuration: DEFAULT_ENVIRONMENT=${DEFAULT_ENVIRONMENT} (from .env)`);
+        console.log(`Production domain: ${PRODUCTION_DOMAIN} (from .env)`);
+        console.log(`Stores will be provisioned to: ${DEFAULT_ENVIRONMENT === 'local' ? 'Local (Kind/k3d/Minikube)' : `Production (k3s VPS) - default domain: ${PRODUCTION_DOMAIN}`}`);
+        console.log('Periodic status refresh enabled (every 5 seconds)');
+    });
+}).catch((error) => {
+    console.error('Failed to verify Kubernetes connection:', error);
+    console.log('Starting backend anyway, but store creation may fail...');
+    app.listen(port, () => {
+        console.log(`Backend listening at http://localhost:${port}`);
+        console.log(`Environment configuration: DEFAULT_ENVIRONMENT=${DEFAULT_ENVIRONMENT} (from .env)`);
+        console.log(`Production domain: ${PRODUCTION_DOMAIN} (from .env)`);
+        console.log(`Stores will be provisioned to: ${DEFAULT_ENVIRONMENT === 'local' ? 'Local (Kind/k3d/Minikube)' : `Production (k3s VPS) - default domain: ${PRODUCTION_DOMAIN}`}`);
+        console.log('Periodic status refresh enabled (every 5 seconds)');
+    });
 });

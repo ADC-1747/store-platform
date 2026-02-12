@@ -26,10 +26,15 @@ spec:
               echo "🌱 Seeding test data"
               npm run seed || echo "Seeding failed or already done, continuing"
               echo "👤 Creating admin user (idempotent)"
+              {{- if .Values.admin.password }}
               npx medusa user \
                 --email {{ include "store-medusa.adminEmail" . | quote }} \
-                --password {{ .Values.admin.password }} \
+                --password {{ .Values.admin.password | quote }} \
               || echo "Admin already exists, continuing"
+              {{- else }}
+              echo "⚠️ WARNING: admin.password not set, skipping admin user creation"
+              echo "⚠️ Admin user must be created manually or via --set admin.password=<password>"
+              {{- end }}
 
               echo "✅ Migration + admin bootstrap complete"
           env:

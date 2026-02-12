@@ -7,7 +7,7 @@ ingress:
   enabled: true
   className: "traefik"  # k3s/k3d default ingress controller
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     # cert-manager annotations will be added by backend when provisioning with real domain
   # Hosts will be auto-generated from backend --set commands
   # Format: <store-name>.<domain>
@@ -32,8 +32,10 @@ mariadb:
   storageClass: "local-path"  # k3s default storage class
   auth:
     username: wpuser
-    password: wp_pass # CHANGE IN PRODUCTION
-    rootPassword: root_pass # CHANGE IN PRODUCTION
+    # IMPORTANT: Password MUST be provided via --set or external secrets
+    # DO NOT use default passwords in production
+    password: ""  # Override via --set mariadb.auth.password=<secure-password>
+    rootPassword: ""  # Override via --set mariadb.auth.rootPassword=<secure-password>
   resources:
     requests:
       cpu: 500m
@@ -55,6 +57,10 @@ replicaCount: 2
 
 # Admin user for production
 admin:
+  username: admin
+  # IMPORTANT: Password MUST be provided via --set or external secrets
+  # DO NOT use default passwords in production
+  password: ""  # Override via --set admin.password=<secure-password>
   # Email will be auto-generated from ingress host/domain if not provided
   # Format: admin@<domain> (e.g., if domain is "store.example.com", email becomes "admin@example.com")
   # Override via --set admin.email=<custom-email> if needed

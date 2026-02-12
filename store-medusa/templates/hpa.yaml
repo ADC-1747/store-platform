@@ -1,0 +1,68 @@
+{{- if and .Values.autoscaling.enabled .Values.autoscaling.backend }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medusa-backend-hpa
+  labels:
+    {{- include "store-medusa.labels" . | nindent 4 }}
+    app: medusa-backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: medusa-backend
+  minReplicas: {{ .Values.autoscaling.backend.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.backend.maxReplicas | default 2 }}
+  metrics:
+    {{- if .Values.autoscaling.backend.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.backend.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.backend.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.backend.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}
+---
+{{- if and .Values.autoscaling.enabled .Values.autoscaling.storefront }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medusa-storefront-hpa
+  labels:
+    {{- include "store-medusa.labels" . | nindent 4 }}
+    app: medusa-storefront
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: medusa-storefront
+  minReplicas: {{ .Values.autoscaling.storefront.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.storefront.maxReplicas | default 2 }}
+  metrics:
+    {{- if .Values.autoscaling.storefront.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.storefront.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.storefront.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.storefront.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}
+

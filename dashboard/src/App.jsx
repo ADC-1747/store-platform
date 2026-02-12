@@ -153,7 +153,7 @@ function App() {
                 onClick={() => setExpandedStore(expandedStore === store.id ? null : store.id)}
                 style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}
               >
-                {expandedStore === store.id ? 'Hide' : 'View'} Events
+                {expandedStore === store.id ? 'Hide' : 'View'} Details
               </button>
               <button className="btn-danger" onClick={() => handleDelete(store.id)}>
                 Delete
@@ -165,41 +165,154 @@ function App() {
               </div>
             )}
             
-            {expandedStore === store.id && store.events && store.events.length > 0 && (
-              <div style={{ 
-                marginTop: '1rem', 
-                padding: '1rem', 
-                background: '#f8fafc', 
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0',
-                maxHeight: '300px',
-                overflowY: 'auto'
-              }}>
-                <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.75rem', color: '#334155' }}>
-                  Activity Log ({store.events.length} events)
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {[...store.events].reverse().map((event, idx) => (
-                    <div key={idx} style={{ 
-                      fontSize: '0.75rem', 
-                      padding: '0.5rem',
-                      background: 'white',
-                      borderRadius: '4px',
-                      borderLeft: `3px solid ${
-                        event.type === 'success' ? '#10b981' :
-                        event.type === 'error' ? '#ef4444' :
-                        event.type === 'warning' ? '#f59e0b' : '#64748b'
-                      }`
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                        <span style={{ color: '#475569', flex: 1 }}>{event.message}</span>
-                        <span style={{ color: '#94a3b8', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
-                          {new Date(event.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
+            {expandedStore === store.id && (
+              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {/* Admin Credentials Section */}
+                {(store.secrets?.adminPassword || store.status === 'Ready') && (
+                  <div style={{ 
+                    padding: '1rem', 
+                    background: '#f0fdf4', 
+                    borderRadius: '8px',
+                    border: '1px solid #86efac'
+                  }}>
+                    <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.75rem', color: '#166534' }}>
+                      🔐 Admin Credentials
                     </div>
-                  ))}
-                </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.875rem' }}>
+                      {store.type === 'woocommerce' && (
+                        <>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <span style={{ color: '#475569', fontWeight: '500', minWidth: '80px' }}>Username:</span>
+                            <code style={{ background: 'white', padding: '0.25rem 0.5rem', borderRadius: '4px', color: '#166534' }}>admin</code>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ color: '#475569', fontWeight: '500', minWidth: '80px' }}>Password:</span>
+                            <code style={{ background: 'white', padding: '0.25rem 0.5rem', borderRadius: '4px', color: '#166534', fontFamily: 'monospace' }}>
+                              {store.secrets?.adminPassword || 'admin123'}
+                            </code>
+                            <button 
+                              onClick={() => {
+                                const password = store.secrets?.adminPassword || 'admin123';
+                                navigator.clipboard.writeText(password);
+                                alert('Password copied to clipboard!');
+                              }}
+                              style={{ 
+                                padding: '0.25rem 0.5rem', 
+                                fontSize: '0.75rem', 
+                                background: '#166534', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: '4px', 
+                                cursor: 'pointer' 
+                              }}
+                            >
+                              Copy
+                            </button>
+                            {!store.secrets?.adminPassword && (
+                              <span style={{ fontSize: '0.75rem', color: '#64748b', fontStyle: 'italic' }}>
+                                (default for local)
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#64748b' }}>
+                            Access: <a href={`${store.url}/wp-admin`} target="_blank" rel="noreferrer" style={{ color: '#166534' }}>{store.url}/wp-admin</a>
+                          </div>
+                        </>
+                      )}
+                      {store.type === 'medusa' && (
+                        <>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <span style={{ color: '#475569', fontWeight: '500', minWidth: '80px' }}>Email:</span>
+                            <code style={{ background: 'white', padding: '0.25rem 0.5rem', borderRadius: '4px', color: '#166534' }}>
+                              {store.secrets?.adminEmail || (() => {
+                                // Generate email from URL if not stored
+                                // IMPORTANT: Must match Helm template logic which extracts LAST 2 parts
+                                // For "store.127.0.0.1.nip.io" -> extracts "nip.io" -> "admin@nip.io"
+                                // For "store.example.com" -> extracts "example.com" -> "admin@example.com"
+                                if (store.url) {
+                                  const host = store.url.replace(/^https?:\/\//, '').split('/')[0];
+                                  const parts = host.split('.');
+                                  if (parts.length >= 2) {
+                                    // Extract last 2 parts (matches Helm template logic)
+                                    return `admin@${parts.slice(-2).join('.')}`;
+                                  }
+                                }
+                                return 'admin@example.com';
+                              })()}
+                            </code>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ color: '#475569', fontWeight: '500', minWidth: '80px' }}>Password:</span>
+                            <code style={{ background: 'white', padding: '0.25rem 0.5rem', borderRadius: '4px', color: '#166534', fontFamily: 'monospace' }}>
+                              {store.secrets?.adminPassword || 'supersecret'}
+                            </code>
+                            <button 
+                              onClick={() => {
+                                const password = store.secrets?.adminPassword || 'supersecret';
+                                navigator.clipboard.writeText(password);
+                                alert('Password copied to clipboard!');
+                              }}
+                              style={{ 
+                                padding: '0.25rem 0.5rem', 
+                                fontSize: '0.75rem', 
+                                background: '#166534', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: '4px', 
+                                cursor: 'pointer' 
+                              }}
+                            >
+                              Copy
+                            </button>
+                            {!store.secrets?.adminPassword && (
+                              <span style={{ fontSize: '0.75rem', color: '#64748b', fontStyle: 'italic' }}>
+                                (default for local)
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Activity Log Section */}
+                {store.events && store.events.length > 0 && (
+                  <div style={{ 
+                    padding: '1rem', 
+                    background: '#f8fafc', 
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    maxHeight: '300px',
+                    overflowY: 'auto'
+                  }}>
+                    <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.75rem', color: '#334155' }}>
+                      Activity Log ({store.events.length} events)
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {[...store.events].reverse().map((event, idx) => (
+                        <div key={idx} style={{ 
+                          fontSize: '0.75rem', 
+                          padding: '0.5rem',
+                          background: 'white',
+                          borderRadius: '4px',
+                          borderLeft: `3px solid ${
+                            event.type === 'success' ? '#10b981' :
+                            event.type === 'error' ? '#ef4444' :
+                            event.type === 'warning' ? '#f59e0b' : '#64748b'
+                          }`
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                            <span style={{ color: '#475569', flex: 1 }}>{event.message}</span>
+                            <span style={{ color: '#94a3b8', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
+                              {new Date(event.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
