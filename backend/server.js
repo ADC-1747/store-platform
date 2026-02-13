@@ -700,7 +700,8 @@ app.post('/api/stores', createStoreLimiter, async (req, res) => {
         // Add event: Helm installation started
         await addStoreEvent(newStore.id, `Installing Helm chart (${type})`, 'info');
         
-        await execPromise(helmCommand);
+        // Use 20 minute timeout for helm install to accommodate cold starts and image pulling
+        await execPromise(helmCommand, 20 * 60 * 1000);
         
         // Add event: Helm installation completed
         await addStoreEvent(newStore.id, `Helm chart installed successfully`, 'success');

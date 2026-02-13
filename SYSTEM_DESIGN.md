@@ -375,8 +375,9 @@ graph TB
 
 **Provisioning Failures**:
 1. **Timeout Detection**: 
+   - 20-minute timeout for Helm install (accommodates cold starts and image pulling)
    - 10-minute timeout for readiness checks (after Helm install)
-   - 15-minute overall provisioning timeout
+   - Overall provisioning can take up to 30 minutes in worst-case scenarios
 2. **Error Capture**: Errors stored in store object with `error` field
 3. **Status Tracking**: Failed stores marked with `status: "Failed"`
 4. **Event Logging**: All failures logged with timestamps
