@@ -2,6 +2,16 @@
 
 This document outlines the architecture choices, design decisions, and tradeoffs made in building the Urumi Store Platform.
 
+> **📊 Diagram Viewing**: This document contains **Mermaid diagrams** that render as visual diagrams.
+> 
+> **To view diagrams properly:**
+> - ✅ **GitHub/GitLab**: Diagrams render automatically when viewing on GitHub
+> - ✅ **VS Code**: Install "Markdown Preview Mermaid Support" extension, then use "Open Preview"
+> - ✅ **Online**: Copy diagram code to [Mermaid Live Editor](https://mermaid.live) to view instantly
+> - ⚠️ **Plain text editors**: Will show code blocks (diagrams need a Mermaid-compatible viewer)
+> 
+> **Quick test**: If you see code blocks starting with ````mermaid` instead of visual diagrams, your viewer doesn't support Mermaid. View the file on GitHub or use the Mermaid Live Editor.
+
 ---
 
 ## Architecture Overview
@@ -29,6 +39,77 @@ The platform is a **multi-tenant store provisioning system** that orchestrates K
 4. **Kubernetes Cluster**
    - Local: Kind/k3d/Minikube
    - Production: k3s on VPS
+
+### System Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        User[👤 User]
+        Browser[🌐 Web Browser]
+    end
+    
+    subgraph "Application Layer"
+        Dashboard[📊 React Dashboard<br/>Port 5173]
+        Backend[⚙️ Node.js Backend<br/>Port 3001]
+    end
+    
+    subgraph "State Management"
+        StoresJSON[(📄 stores.json<br/>File-based State)]
+    end
+    
+    subgraph "Kubernetes Cluster"
+        K8sAPI[☸️ Kubernetes API]
+        
+        subgraph "Store Namespace"
+            HelmRelease[📦 Helm Release]
+            Ingress[🌐 Ingress<br/>Traefik]
+            
+            subgraph "WooCommerce Stack"
+                WP[📝 WordPress Pod]
+                MariaDB[(🗄️ MariaDB<br/>PVC)]
+                BootstrapJob[🔧 Bootstrap Job]
+            end
+            
+            subgraph "Medusa Stack"
+                MedusaBackend[⚡ Medusa Backend]
+                MedusaStorefront[🛍️ Medusa Storefront]
+                PostgreSQL[(🗄️ PostgreSQL<br/>PVC)]
+                Redis[(⚡ Redis)]
+            end
+            
+            ResourceQuota[📊 ResourceQuota]
+            LimitRange[📏 LimitRange]
+            NetworkPolicy[🔒 NetworkPolicy]
+        end
+    end
+    
+    User --> Browser
+    Browser --> Dashboard
+    Dashboard -->|HTTP Polling<br/>Every 5s| Backend
+    Backend -->|Read/Write| StoresJSON
+    Backend -->|kubectl commands| K8sAPI
+    K8sAPI --> HelmRelease
+    HelmRelease --> WP
+    HelmRelease --> MariaDB
+    HelmRelease --> BootstrapJob
+    HelmRelease --> MedusaBackend
+    HelmRelease --> MedusaStorefront
+    HelmRelease --> PostgreSQL
+    HelmRelease --> Redis
+    HelmRelease --> ResourceQuota
+    HelmRelease --> LimitRange
+    HelmRelease --> NetworkPolicy
+    Ingress --> WP
+    Ingress --> MedusaStorefront
+    Ingress --> MedusaBackend
+    
+    style Dashboard fill:#e1f5ff
+    style Backend fill:#fff4e1
+    style StoresJSON fill:#ffe1f5
+    style HelmRelease fill:#e1ffe1
+    style K8sAPI fill:#f0e1ff
+```
 
 ---
 
@@ -89,6 +170,54 @@ class FileMutex {
 - Background async function handles Helm deployment
 - Status updates via periodic refresh mechanism
 
+**Store Provisioning Flow**:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Dashboard
+    participant Backend
+    participant FileMutex
+    participant K8sAPI
+    participant Helm
+    participant Pods
+    
+    User->>Dashboard: Click "Create Store"
+    Dashboard->>Backend: POST /api/stores
+    Backend->>FileMutex: Acquire lock
+    Backend->>Backend: Check duplicate name
+    Backend->>Backend: Create store object<br/>(status: "Provisioning")
+    Backend->>FileMutex: Release lock
+    Backend-->>Dashboard: 201 Created<br/>(status: "Provisioning")
+    Dashboard-->>User: Store appears immediately
+    
+    Note over Backend: Background async provisioning starts
+    
+    Backend->>K8sAPI: kubectl create namespace
+    K8sAPI-->>Backend: Namespace created
+    Backend->>Backend: addStoreEvent("Namespace created")
+    
+    Backend->>Helm: helm install chart
+    Helm->>K8sAPI: Create resources
+    K8sAPI->>Pods: Start pods
+    Helm-->>Backend: Helm install complete
+    Backend->>Backend: addStoreEvent("Helm installed")
+    
+    loop Every 10s for max 10min
+        Backend->>Pods: Check readiness
+        Pods-->>Backend: Status
+        alt Pods Ready
+            Backend->>Backend: Update status: "Ready"
+            Backend->>Backend: addStoreEvent("Store ready")
+        end
+    end
+    
+    Note over Dashboard: Polls every 5s
+    Dashboard->>Backend: GET /api/stores
+    Backend-->>Dashboard: Updated store status
+    Dashboard-->>User: Status updates automatically
+```
+
 **Tradeoffs**:
 - ✅ Fast API response
 - ✅ Better user experience
@@ -105,6 +234,77 @@ class FileMutex {
 - Easy cleanup (delete namespace = delete all resources)
 - Natural multi-tenancy boundary
 - Kubernetes-native approach
+
+**Multi-Tenant Isolation Architecture**:
+
+```mermaid
+graph TB
+    subgraph "Kubernetes Cluster"
+        subgraph "Namespace: store-store1"
+            Store1[🏪 Store 1<br/>WooCommerce]
+            DB1[(🗄️ MariaDB)]
+            PVC1[(💾 PVC)]
+            Secret1[🔐 Secrets]
+            Quota1[📊 ResourceQuota]
+            Limit1[📏 LimitRange]
+            NetPol1[🔒 NetworkPolicy]
+        end
+        
+        subgraph "Namespace: store-store2"
+            Store2[🏪 Store 2<br/>Medusa]
+            DB2[(🗄️ PostgreSQL)]
+            Redis2[(⚡ Redis)]
+            PVC2[(💾 PVC)]
+            Secret2[🔐 Secrets]
+            Quota2[📊 ResourceQuota]
+            Limit2[📏 LimitRange]
+            NetPol2[🔒 NetworkPolicy]
+        end
+        
+        subgraph "Namespace: store-store3"
+            Store3[🏪 Store 3<br/>WooCommerce]
+            DB3[(🗄️ MariaDB)]
+            PVC3[(💾 PVC)]
+            Secret3[🔐 Secrets]
+            Quota3[📊 ResourceQuota]
+            Limit3[📏 LimitRange]
+            NetPol3[🔒 NetworkPolicy]
+        end
+        
+        Ingress[🌐 Traefik Ingress]
+    end
+    
+    Ingress --> Store1
+    Ingress --> Store2
+    Ingress --> Store3
+    
+    Store1 -.->|Isolated| DB1
+    Store1 -.->|Isolated| PVC1
+    Store1 -.->|Isolated| Secret1
+    Store1 -.->|Isolated| Quota1
+    Store1 -.->|Isolated| Limit1
+    Store1 -.->|Isolated| NetPol1
+    
+    Store2 -.->|Isolated| DB2
+    Store2 -.->|Isolated| Redis2
+    Store2 -.->|Isolated| PVC2
+    Store2 -.->|Isolated| Secret2
+    Store2 -.->|Isolated| Quota2
+    Store2 -.->|Isolated| Limit2
+    Store2 -.->|Isolated| NetPol2
+    
+    Store3 -.->|Isolated| DB3
+    Store3 -.->|Isolated| PVC3
+    Store3 -.->|Isolated| Secret3
+    Store3 -.->|Isolated| Quota3
+    Store3 -.->|Isolated| Limit3
+    Store3 -.->|Isolated| NetPol3
+    
+    style Store1 fill:#e1f5ff
+    style Store2 fill:#ffe1f5
+    style Store3 fill:#e1ffe1
+    style Ingress fill:#fff4e1
+```
 
 **Tradeoffs**:
 - ✅ Strong isolation
@@ -174,7 +374,9 @@ class FileMutex {
 ### Failure Handling
 
 **Provisioning Failures**:
-1. **Timeout Detection**: 10-minute timeout for readiness checks
+1. **Timeout Detection**: 
+   - 10-minute timeout for readiness checks (after Helm install)
+   - 15-minute overall provisioning timeout
 2. **Error Capture**: Errors stored in store object with `error` field
 3. **Status Tracking**: Failed stores marked with `status: "Failed"`
 4. **Event Logging**: All failures logged with timestamps
@@ -187,7 +389,9 @@ class FileMutex {
   - Preserves secrets during status updates (prevents data loss)
   - Can detect recovery from Failed to Ready state
 - **Grace Period**: 30-second grace period before marking as Failed
-- **Stuck Detection**: Stores provisioning >30 minutes can be deleted
+- **Stuck Detection**: 
+  - Stores provisioning >=10 minutes can be deleted (likely stuck)
+  - Stores provisioning >=30 minutes are definitely stuck and can be deleted
 - **Readiness Verification**: Comprehensive checks (pods, jobs, ingress)
 
 **Failure Scenarios Handled**:
@@ -206,9 +410,60 @@ class FileMutex {
 3. Delete namespace (idempotent, removes all resources)
 4. Remove from stores.json
 
+**Store Deletion Flow**:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Dashboard
+    participant Backend
+    participant FileMutex
+    participant Helm
+    participant K8sAPI
+    
+    User->>Dashboard: Click "Delete Store"
+    Dashboard->>Backend: DELETE /api/stores/:id
+    
+    Backend->>Backend: Check deletion protection<br/>(<10 min provisioning?)
+    
+    alt Provisioning < 10 minutes
+        Backend-->>Dashboard: 409 Conflict<br/>"Cannot delete while provisioning"
+        Dashboard-->>User: Error message
+    else Can delete
+        Backend->>FileMutex: Acquire lock
+        Backend->>Backend: Update status: "Deleting"
+        Backend->>Backend: addStoreEvent("Deletion initiated")
+        Backend->>FileMutex: Release lock
+        Backend-->>Dashboard: 204 No Content
+        
+        Note over Backend: Background cleanup starts
+        
+        Backend->>Backend: addStoreEvent("Uninstalling Helm")
+        Backend->>Helm: helm uninstall name || true
+        Helm->>K8sAPI: Remove Helm resources
+        Helm-->>Backend: Uninstall complete
+        Backend->>Backend: addStoreEvent("Helm uninstalled")
+        
+        Backend->>Backend: addStoreEvent("Deleting namespace")
+        Backend->>K8sAPI: kubectl delete namespace || true
+        K8sAPI->>K8sAPI: Remove all resources<br/>(Pods, PVCs, Secrets, etc.)
+        K8sAPI-->>Backend: Namespace deleted
+        Backend->>Backend: addStoreEvent("Cleanup completed")
+        
+        Backend->>FileMutex: Acquire lock
+        Backend->>Backend: Remove from stores.json
+        Backend->>FileMutex: Release lock
+        
+        Dashboard->>Backend: GET /api/stores
+        Backend-->>Dashboard: Store removed
+        Dashboard-->>User: Store disappears
+    end
+```
+
 **Protection Mechanisms**:
-- Cannot delete stores actively provisioning (<30 minutes, Helm release exists)
-- Can delete stuck stores (>30 minutes provisioning)
+- Cannot delete stores actively provisioning (<10 minutes, Helm release exists)
+- Can delete stuck stores (>=10 minutes provisioning - likely stuck)
+- Can delete stores definitely stuck (>=30 minutes provisioning)
 - Can delete stores with failed Helm releases
 - Status reversion on deletion errors
 
@@ -220,6 +475,51 @@ class FileMutex {
 ---
 
 ## Production Differences
+
+### Local vs Production Architecture
+
+```mermaid
+graph LR
+    subgraph "Local Environment"
+        LocalUser[👤 Developer]
+        LocalDash[📊 Dashboard<br/>localhost:5173]
+        LocalBackend[⚙️ Backend<br/>localhost:3001]
+        LocalK8s[☸️ k3d Cluster]
+        LocalIngress[🌐 Traefik<br/>HTTP only]
+        LocalStore[🏪 Store<br/>*.127.0.0.1.nip.io]
+        LocalDB[(🗄️ Database<br/>local-path)]
+    end
+    
+    subgraph "Production Environment"
+        ProdUser[👤 End User]
+        ProdDash[📊 Dashboard<br/>dashboard.domain.com]
+        ProdBackend[⚙️ Backend<br/>api.domain.com]
+        ProdK8s[☸️ k3s Cluster<br/>VPS]
+        ProdIngress[🌐 Traefik<br/>HTTP + HTTPS]
+        CertManager[🔒 cert-manager<br/>Let's Encrypt]
+        ProdStore[🏪 Store<br/>*.domain.com<br/>HTTPS]
+        ProdDB[(🗄️ Database<br/>local-path)]
+    end
+    
+    LocalUser --> LocalDash
+    LocalDash --> LocalBackend
+    LocalBackend --> LocalK8s
+    LocalK8s --> LocalIngress
+    LocalIngress --> LocalStore
+    LocalStore --> LocalDB
+    
+    ProdUser --> ProdDash
+    ProdDash --> ProdBackend
+    ProdBackend --> ProdK8s
+    ProdK8s --> ProdIngress
+    ProdIngress --> CertManager
+    CertManager --> ProdStore
+    ProdStore --> ProdDB
+    
+    style LocalStore fill:#e1f5ff
+    style ProdStore fill:#ffe1f5
+    style CertManager fill:#fff4e1
+```
 
 ### DNS & Ingress
 
@@ -352,6 +652,46 @@ if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROT
 
 ## Observability & Monitoring
 
+### Observability Architecture
+
+```mermaid
+graph TB
+    subgraph "Data Collection"
+        Backend[⚙️ Backend API]
+        K8sAPI[☸️ Kubernetes API]
+        StoresJSON[(📄 stores.json)]
+    end
+    
+    subgraph "Metrics & Events"
+        MetricsEP[/api/metrics<br/>Endpoint]
+        Events[📝 Event Logs<br/>per Store]
+        StatusRefresh[🔄 Status Refresh<br/>Every 5s]
+    end
+    
+    subgraph "Dashboard Display"
+        MetricsHeader[📊 Metrics Header<br/>Total, Status, Duration]
+        StoreCards[🏪 Store Cards<br/>Status, URL, Timestamp]
+        StoreDetails[📋 Store Details<br/>Credentials, Events]
+        ActivityLog[📜 Activity Log<br/>Color-coded Events]
+    end
+    
+    Backend --> MetricsEP
+    Backend --> Events
+    Backend --> StatusRefresh
+    K8sAPI --> StatusRefresh
+    StoresJSON --> MetricsEP
+    StoresJSON --> Events
+    
+    MetricsEP --> MetricsHeader
+    Events --> ActivityLog
+    StoresJSON --> StoreCards
+    StoresJSON --> StoreDetails
+    
+    style MetricsEP fill:#e1f5ff
+    style Events fill:#ffe1f5
+    style StatusRefresh fill:#fff4e1
+```
+
 ### Metrics Endpoint
 
 **Implementation**: `/api/metrics` endpoint provides:
@@ -401,6 +741,63 @@ if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROT
 
 ## Scaling Considerations
 
+### Scaling Architecture
+
+```mermaid
+graph TB
+    subgraph "Current Architecture"
+        SingleBackend[⚙️ Single Backend<br/>File-based State]
+        FileMutex[🔒 File Mutex<br/>In-memory]
+        StoresJSON[(📄 stores.json<br/>Single File)]
+    end
+    
+    subgraph "Future Scalable Architecture"
+        LB[⚖️ Load Balancer]
+        
+        subgraph "Backend Instances"
+            Backend1[⚙️ Backend 1]
+            Backend2[⚙️ Backend 2]
+            Backend3[⚙️ Backend 3]
+        end
+        
+        DB[(🗄️ PostgreSQL<br/>Shared State)]
+        Redis[(⚡ Redis<br/>Distributed Locking)]
+        Queue[📬 Provisioning Queue<br/>RabbitMQ/Redis]
+    end
+    
+    subgraph "Store Scaling"
+        HPA[📈 HPA<br/>Auto-scaling]
+        Pod1[📦 Pod 1]
+        Pod2[📦 Pod 2]
+        Pod3[📦 Pod 3]
+    end
+    
+    SingleBackend --> FileMutex
+    FileMutex --> StoresJSON
+    
+    LB --> Backend1
+    LB --> Backend2
+    LB --> Backend3
+    Backend1 --> DB
+    Backend2 --> DB
+    Backend3 --> DB
+    Backend1 --> Redis
+    Backend2 --> Redis
+    Backend3 --> Redis
+    Backend1 --> Queue
+    Backend2 --> Queue
+    Backend3 --> Queue
+    
+    HPA --> Pod1
+    HPA --> Pod2
+    HPA --> Pod3
+    
+    style SingleBackend fill:#ffe1f5
+    style DB fill:#e1ffe1
+    style Redis fill:#fff4e1
+    style Queue fill:#e1f5ff
+```
+
 ### Backend Scaling
 
 **Current**: Stateless backend can be horizontally scaled.
@@ -445,6 +842,58 @@ if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROT
 
 ## Security Considerations
 
+### Security Architecture
+
+```mermaid
+graph TB
+    subgraph "Access Control"
+        User[👤 User/Process]
+        RBAC[🔐 RBAC<br/>ClusterRole<br/>ClusterRoleBinding]
+        K8sAPI[☸️ Kubernetes API]
+    end
+    
+    subgraph "Network Security"
+        Ingress[🌐 Traefik Ingress]
+        NetPol[🔒 NetworkPolicy<br/>Deny-by-default]
+        
+        subgraph "Store Namespace"
+            Pod[📦 Pod]
+            DB[(🗄️ Database)]
+        end
+    end
+    
+    subgraph "Secret Management"
+        Secrets[🔐 Kubernetes Secrets]
+        GeneratedSecrets[🎲 Generated Secrets<br/>crypto.randomBytes]
+        StoresJSON[(📄 stores.json<br/>Plain text)]
+    end
+    
+    subgraph "Rate Limiting"
+        RateLimit[⏱️ Rate Limiting<br/>express-rate-limit]
+        CreateLimit[10 req/15min<br/>Store Creation]
+        GeneralLimit[100 req/min<br/>General API]
+    end
+    
+    User --> RBAC
+    RBAC --> K8sAPI
+    
+    Ingress --> NetPol
+    NetPol --> Pod
+    Pod --> DB
+    
+    GeneratedSecrets --> Secrets
+    Secrets --> StoresJSON
+    StoresJSON --> RateLimit
+    
+    RateLimit --> CreateLimit
+    RateLimit --> GeneralLimit
+    
+    style RBAC fill:#e1f5ff
+    style NetPol fill:#ffe1f5
+    style GeneratedSecrets fill:#fff4e1
+    style RateLimit fill:#e1ffe1
+```
+
 ### RBAC
 
 **Implementation**: `backend/rbac/` directory contains:
@@ -485,6 +934,28 @@ if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROT
 
 ## Upgrade & Rollback Strategy
 
+### Upgrade & Rollback Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> CurrentVersion: Store Running
+    
+    CurrentVersion --> UpgradeInProgress: helm upgrade
+    UpgradeInProgress --> UpgradeSuccess: Pods Ready
+    UpgradeInProgress --> UpgradeFailed: Pods Failed
+    
+    UpgradeSuccess --> NewVersion: Upgrade Complete
+    UpgradeFailed --> Rollback: helm rollback
+    
+    Rollback --> CurrentVersion: Rollback Complete
+    
+    NewVersion --> UpgradeInProgress: Another Upgrade
+    NewVersion --> Rollback: Issue Detected
+    
+    UpgradeInProgress: Monitor pods<br/>Check readiness<br/>Verify functionality
+    Rollback: Helm maintains history<br/>Can rollback to any revision<br/>Database state preserved
+```
+
 ### Helm Upgrades
 
 **Standard Process**:
@@ -516,6 +987,8 @@ helm rollback <store-name> -n store-<store-name>
 ### Store Version Management
 
 **Current**: All stores use same chart version.
+
+**Documentation**: Comprehensive upgrade and rollback guide available in `docs/UPGRADE_ROLLBACK.md`.
 
 **Future Enhancement**:
 - Track chart version per store

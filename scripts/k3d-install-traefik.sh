@@ -36,5 +36,7 @@ echo ""
 kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik
 
 echo ""
-echo "✅ Setup complete! Next step:"
-echo "   Run ./k3d-deploy-test.sh to deploy your Helm chart"
+echo "✅ Setup complete! Next steps:"
+echo "   1. Start backend: cd backend && npm install && node server.js"
+echo "   2. Start dashboard: cd dashboard && npm install && npm run dev"
+echo "   3. Open http://localhost:5173 to create stores via dashboard"

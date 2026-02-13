@@ -4,6 +4,13 @@ This document provides step-by-step instructions for setting up and running the 
 
 ---
 
+## Quick Summary
+1. Make sure you have Node v20+, docker, kubectl, and helmv3 installed in the system
+2. then please run the `./scripts/k3d-setup.sh`
+3. then please run the `./scripts/k3d-install-traefik.sh`
+4. Then please `cd backend` and then `npm install` and then `node server.js`
+5. then in the dashboard dir please run `npm install` and then `npm run dev`
+
 ## 📋 Table of Contents
 
 1. [Prerequisites](#prerequisites)

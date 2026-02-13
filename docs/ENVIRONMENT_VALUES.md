@@ -7,7 +7,7 @@ This document explains how to use environment-specific Helm values files for dep
 Each Helm chart (`store-woocommerce` and `store-medusa`) now has three values files:
 
 1. **`values.yaml`** - Base values with common defaults
-2. **`values-local.yaml`** - Local development environment (Kind)
+2. **`values-local.yaml`** - Local development environment (k3d/Kind/Minikube)
 3. **`values-prod.yaml`** - Production environment (k3s on VPS)
 
 ## Key Differences Between Environments

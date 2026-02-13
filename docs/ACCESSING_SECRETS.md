@@ -98,12 +98,16 @@ kubectl get secret medusa-secret -n store-<store-name> -o jsonpath='{.data.jwtSe
 
 ### Medusa Stores
 
-- **Admin URL**: `http://<store-name>.127.0.0.1.nip.io:9000/app` (local)
+- **Admin URL**: `http://<store-name>-api.127.0.0.1.nip.io/app` (local)
 - **Admin URL**: `https://<store-name>-api.<domain>/app` (production)
 - **Email**: Auto-generated from domain (e.g., `admin@<domain>`)
 - **Password**: 
   - **Local**: `supersecret` (default)
   - **Production**: Generated secure password (shown in dashboard)
+
+**Note**: Medusa uses separate hostnames for storefront and backend:
+- **Storefront**: `<store-name>.127.0.0.1.nip.io` (or `<store-name>.<domain>`)
+- **Backend/Admin**: `<store-name>-api.127.0.0.1.nip.io` (or `<store-name>-api.<domain>`)
 
 ---
 

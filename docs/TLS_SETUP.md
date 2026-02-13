@@ -14,6 +14,16 @@
 
 cert-manager automatically manages TLS certificates in Kubernetes.
 
+**Method 1: Using kubectl (Simpler - Recommended)**
+```bash
+# Install cert-manager using kubectl
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+
+# Wait for cert-manager to be ready
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=120s
+```
+
+**Method 2: Using Helm (Alternative)**
 ```bash
 # Install cert-manager using Helm
 helm repo add jetstack https://charts.jetstack.io
@@ -26,6 +36,8 @@ helm install cert-manager jetstack/cert-manager \
   --set installCRDs=true \
   --version v1.13.0
 ```
+
+**Note**: Both methods work. Method 1 (kubectl) is simpler and matches the installation method used in README.md.
 
 ## Step 2: Create Let's Encrypt ClusterIssuer
 

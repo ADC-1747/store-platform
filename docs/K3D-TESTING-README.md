@@ -6,30 +6,40 @@ This directory contains scripts and configuration for testing your Helm charts i
 
 ```bash
 # 1. Create k3d cluster
-./k3d-setup.sh
+./scripts/k3d-setup.sh
 
 # 2. Install Traefik ingress controller
-./k3d-install-traefik.sh
+./scripts/k3d-install-traefik.sh
 
-# 3. Deploy and test your Helm chart
-./k3d-deploy-test.sh
+# 3. Deploy a test store via dashboard or API
+# Option A: Use the dashboard (recommended)
+# - Start backend: cd backend && npm install && node server.js
+# - Start dashboard: cd dashboard && npm install && npm run dev
+# - Open http://localhost:5173 and create a store
+
+# Option B: Deploy via Helm directly
+helm install test-store ./store-woocommerce \
+  -n store-test-store \
+  --create-namespace \
+  -f store-woocommerce/values-local.yaml
 
 # 4. Cleanup when done
-./k3d-cleanup.sh
+./scripts/k3d-cleanup.sh
 ```
 
-## 📁 Files
+## 📁 Available Scripts
 
-- **k3d-setup.sh** - Creates k3d cluster with k3s
-- **k3d-install-traefik.sh** - Installs Traefik ingress controller
-- **k3d-deploy-test.sh** - Deploys Helm chart for testing
-- **k3d-cleanup.sh** - Removes k3d cluster
-- **k3d-check-status.sh** - Checks deployment status and resources
-- **values-k3d-test.yaml** - Production-like values for local testing
+- **k3d-setup.sh** - Creates k3d cluster with k3s (located in `scripts/` directory)
+- **k3d-install-traefik.sh** - Installs Traefik ingress controller (located in `scripts/` directory)
+- **k3d-cleanup.sh** - Removes k3d cluster (located in `scripts/` directory)
+- **apply-rbac.sh** - Applies RBAC permissions for backend (located in `scripts/` directory)
 
 ## 📖 Full Documentation
 
-See the [k3d Testing Guide](file:///home/adc/.gemini/antigravity/brain/93aea747-dbc4-4843-a177-1f0156a08c0d/k3d-testing-guide.md) for detailed instructions, troubleshooting, and best practices.
+For detailed setup instructions, see:
+- [INSTRUCTIONS.md](../INSTRUCTIONS.md) - Complete setup guide
+- [README.md](../README.md) - Main documentation
+- [ENVIRONMENT_VALUES.md](./ENVIRONMENT_VALUES.md) - Values file differences
 
 ## ✅ What This Tests
 

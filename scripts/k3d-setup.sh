@@ -115,5 +115,7 @@ kubectl get nodes
 
 echo ""
 echo "✅ Setup complete! Next steps:"
-echo "   1. Run ./k3d-install-traefik.sh to install Traefik ingress controller"
-echo "   2. Run ./k3d-deploy-test.sh to deploy your Helm chart"
+echo "   1. Run ./scripts/k3d-install-traefik.sh to install Traefik ingress controller"
+echo "   2. Start backend: cd backend && npm install && node server.js"
+echo "   3. Start dashboard: cd dashboard && npm install && npm run dev"
+echo "   4. Open http://localhost:5173 to create stores via dashboard"
